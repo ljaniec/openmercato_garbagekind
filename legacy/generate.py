@@ -5,8 +5,12 @@ Tworzy plik SQLite ze zbiorem bazowym (historia, ktora "od lat siedzi
 w starym systemie") oraz ze zbiorem zapasowym ruchow, ktore ujawniaja sie
 stopniowo w czasie dzialania demo.
 
+Przy okazji zaklada poczatkowy zrzut plikowy w katalogu wsad/ (katalogi w CSV,
+ksiega ruchow w .xlsx) - bo czesci danych webERP przez XML-RPC nie wystawia
+i w prawdziwym wdrozeniu przychodza one z innej bazy albo z excelka.
+
 Uruchomienie:
-    python3 legacy/generate.py --db legacy/sortownia.db
+    python3 legacy/generate.py --db legacy/sortownia.db --wsad legacy/wsad
 """
 
 from __future__ import annotations
@@ -16,6 +20,11 @@ import datetime as dt
 import pathlib
 import random
 import sqlite3
+
+try:  # uruchomienie jako modul pakietu (testy)
+    from . import spooler
+except ImportError:  # uruchomienie jako skrypt
+    import spooler  # type: ignore
 
 HERE = pathlib.Path(__file__).resolve().parent
 SCHEMA = HERE / "schema.sql"
@@ -112,9 +121,9 @@ def make_base_moves(rng: random.Random, now: dt.datetime, count: int, start_no: 
 def make_reserve_moves(rng: random.Random, now: dt.datetime, count: int, start_no: int, step_seconds: int):
     """Zbior zapasowy: ruchy ze znacznikami czasu w przyszlosci.
 
-    Serwer pokazuje tylko te, ktorych trandate juz minela, wiec kolejne
-    wywolania GetStockMovesSince znajduja nowe rekordy - to daje efekt
-    zywej synchronizacji przyrostowej.
+    Spooler zrzuca do wsad/ tylko te ruchy, ktorych trandate juz minela, wiec
+    plik rosnie w czasie, a kolejne uruchomienia klienta znajduja nowe rekordy
+    - to daje efekt zywej synchronizacji przyrostowej.
     """
     moves = []
     for i in range(count):
@@ -151,7 +160,8 @@ def make_sales_orders(base_moves, start_no: int):
     return orders
 
 
-def build(db_path: pathlib.Path, base_moves_count: int, reserve_moves_count: int, reserve_step: int) -> None:
+def build(db_path: pathlib.Path, base_moves_count: int, reserve_moves_count: int, reserve_step: int,
+          wsad_dir: pathlib.Path | None = None) -> None:
     rng = random.Random(SEED)
     now = dt.datetime.now().replace(microsecond=0)
 
@@ -196,6 +206,11 @@ def build(db_path: pathlib.Path, base_moves_count: int, reserve_moves_count: int
         print(f"  {table:<14} {n}")
     print(f"  w tym ruchy zapasowe: {len(reserve_moves)} (co {reserve_step} s od teraz)")
 
+    if wsad_dir is not None:
+        spooler.export_catalogs(db_path, wsad_dir)
+        exported = spooler.export_moves(db_path, wsad_dir)
+        print(f"Zrzut plikowy: {wsad_dir} (ruchy w excelku: {exported})")
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generator bazy legacy sortowni")
@@ -204,8 +219,11 @@ def main() -> None:
     parser.add_argument("--reserve-moves", type=int, default=60, help="liczba ruchow zbioru zapasowego")
     parser.add_argument("--reserve-step", type=int, default=20,
                         help="co ile sekund ujawnia sie kolejny ruch zapasowy")
+    parser.add_argument("--wsad", default=str(HERE / "wsad"),
+                        help="katalog zrzutu plikowego (katalogi CSV + ksiega ruchow .xlsx)")
     args = parser.parse_args()
-    build(pathlib.Path(args.db), args.base_moves, args.reserve_moves, args.reserve_step)
+    build(pathlib.Path(args.db), args.base_moves, args.reserve_moves, args.reserve_step,
+          pathlib.Path(args.wsad))
 
 
 if __name__ == "__main__":
