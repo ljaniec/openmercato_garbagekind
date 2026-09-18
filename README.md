@@ -93,10 +93,16 @@ Open Mercato normalizuje do Mg. Konwersja jest świadomym elementem demo:
 pokazuje realny problem migracyjny, a nie tylko przepisanie wierszy — klient
 emituje obie wartości (`ilosc_kg`, `ilosc_mg`).
 
-**Typy ruchu** (`stockmoves.type`): `PZ` przyjęcie odpadu, `SORT` wysortowanie
-frakcji, `WZ` wydanie do odbiorcy (ilość ujemna, konwencja webERP).
+**Typy ruchu** (`stockmoves.type`): `PZ` przyjęcie odpadu na plac, `SORT`
+wysortowanie frakcji, `WZ` wydanie do odbiorcy (ilość ujemna, konwencja webERP).
 Prawdziwy webERP używa w tym miejscu numerycznych `systypes`. To uproszczenie
 jest świadome i oznaczone w schemacie, żeby nikt nie budował na nim fałszywej precyzji.
+
+**`SORT` to para wierszy**, jak przesunięcie międzymagazynowe: minus na placu
+przyjęć, plus w boksie. Generator prowadzi saldo i pozwala wydać albo wysortować
+tylko tyle, ile naprawdę leży, więc **żaden stan nie schodzi poniżej zera** —
+pilnuje tego test. Bioodpady jadą wprost z placu do kompostowni i nie mają
+ruchu `SORT`.
 
 ## Zbiory danych
 

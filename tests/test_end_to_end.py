@@ -36,6 +36,8 @@ class EndToEndTest(unittest.TestCase):
         cls.root = pathlib.Path(cls.tmp.name)
         cls.db = cls.root / "sortownia.db"
         cls.wsad = cls.root / "wsad"
+        # Chwila zamkniecia bazy: ruchy bazowe sa wczesniejsze, zapasowe pozniejsze.
+        cls.built_at = dt.datetime.now().replace(microsecond=0).isoformat()
         # Kryterium: generator tworzy baze i zrzut plikowy bez bledu.
         generate.build(cls.db, base_moves_count=200, reserve_moves_count=60,
                        reserve_step=RESERVE_STEP, wsad_dir=cls.wsad)
@@ -109,6 +111,46 @@ class EndToEndTest(unittest.TestCase):
         self.assertGreater(after, before, "kolejny zrzut nie przyniosl nowych ruchow")
         # Przywracamy stan biezacy, zeby inne testy nie zalezaly od kolejnosci.
         spooler.export_moves(self.db, self.wsad)
+
+    # --- sens danych ---------------------------------------------------------
+
+    def test_stock_never_goes_negative(self) -> None:
+        """Sortownia nie moze wydac wiecej, niz przyjela."""
+        import sqlite3
+        conn = sqlite3.connect(f"file:{self.db}?mode=ro", uri=True)
+        try:
+            negative = conn.execute(
+                "SELECT stockid, loccode, quantity FROM locstock WHERE quantity < 0").fetchall()
+            self.assertEqual([], negative, f"ujemne stany magazynowe: {negative}")
+
+            # locstock to stan na chwile zamkniecia bazy: suma ruchow bazowych.
+            as_of = self.built_at
+            ledger: dict[tuple[str, str], float] = {}
+            for stockid, loccode, qty in conn.execute(
+                    "SELECT stockid, loccode, qty FROM stockmoves WHERE trandate <= ?", (as_of,)):
+                key = (stockid, loccode)
+                ledger[key] = round(ledger.get(key, 0.0) + qty, 2)
+            for stockid, loccode, quantity in conn.execute(
+                    "SELECT stockid, loccode, quantity FROM locstock"):
+                self.assertAlmostEqual(ledger.get((stockid, loccode), 0.0), quantity, places=1,
+                                       msg=f"stan {stockid}/{loccode} nie zgadza sie z ksiega")
+        finally:
+            conn.close()
+
+    def test_sorting_is_a_transfer(self) -> None:
+        """SORT zdejmuje z placu przyjec dokladnie tyle, ile kladzie w boksie."""
+        import sqlite3
+        conn = sqlite3.connect(f"file:{self.db}?mode=ro", uri=True)
+        try:
+            out_of_yard = conn.execute(
+                "SELECT COALESCE(SUM(qty), 0) FROM stockmoves WHERE type = 'SORT' AND loccode = 'PRZYJ'"
+            ).fetchone()[0]
+            into_boxes = conn.execute(
+                "SELECT COALESCE(SUM(qty), 0) FROM stockmoves WHERE type = 'SORT' AND loccode != 'PRZYJ'"
+            ).fetchone()[0]
+            self.assertAlmostEqual(-out_of_yard, into_boxes, places=1)
+        finally:
+            conn.close()
 
     # --- integracja ----------------------------------------------------------
 

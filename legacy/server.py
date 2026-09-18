@@ -133,13 +133,20 @@ class LegacyApi:
         return found if found is not None else NOT_FOUND
 
     def GetStockBalance(self, stockid, loccode):
+        """Stan liczony z ksiegi ruchow, ktore juz zaszly.
+
+        W webERP ta metoda czyta zmaterializowana tabele locstock. Tutaj
+        sumujemy stockmoves, bo ruchy ze zbioru zapasowego ujawniaja sie
+        w trakcie demo - dzieki temu stan rosnie razem z ksiega, zamiast
+        zostac zamrozony na chwili wygenerowania bazy. Kontrakt metody
+        (pola stockid, loccode, quantity) jest ten sam.
+        """
         found = self.db.one(
-            "SELECT stockid, loccode, quantity FROM locstock WHERE stockid = ? AND loccode = ?",
-            (str(stockid), str(loccode)),
+            "SELECT ? AS stockid, ? AS loccode, COALESCE(SUM(qty), 0.0) AS quantity "
+            "FROM stockmoves WHERE stockid = ? AND loccode = ? AND trandate <= ?",
+            (str(stockid), str(loccode), str(stockid), str(loccode), _now().isoformat()),
         )
-        if found is None:
-            # Brak wiersza w locstock to w webERP po prostu stan zerowy.
-            return {"stockid": str(stockid), "loccode": str(loccode), "quantity": 0.0}
+        found["quantity"] = round(found["quantity"], 2)
         return found
 
     def GetSalesOrderHeader(self, orderno):

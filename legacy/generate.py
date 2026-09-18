@@ -86,62 +86,105 @@ FRACTION_BUYER = {
 SUPPLIERS = [d[0] for d in DEBTORS if d[4] == "DOS"]
 COST = {s[0]: s[4] for s in STOCKS}
 
+# Frakcje, ktore przechodza przez sortowanie. Bioodpady jada wprost z placu
+# przyjec do kompostowni, wiec nie maja wlasnego boksu i nie maja ruchu SORT.
+SORTED_FRACTIONS = [s for s in FRACTION_LOC if FRACTION_LOC[s] != "PRZYJ"]
+
+RECEIVING = "PRZYJ"
+
+
+class Ledger:
+    """Saldo magazynu prowadzone w trakcie generowania.
+
+    Bez tego generator wypuszczal wiecej, niz przyjal, i stany schodzily
+    ponizej zera - w sortowni to niemozliwe, a na ekranie wyglada jak blad
+    integracji, nie jak dane.
+    """
+
+    def __init__(self) -> None:
+        self.balance: dict[tuple[str, str], float] = {}
+
+    def get(self, stockid: str, loccode: str) -> float:
+        return self.balance.get((stockid, loccode), 0.0)
+
+    def add(self, stockid: str, loccode: str, qty: float) -> None:
+        key = (stockid, loccode)
+        self.balance[key] = round(self.balance.get(key, 0.0) + qty, 2)
+
 
 def iso(moment: dt.datetime) -> str:
     return moment.replace(microsecond=0).isoformat()
 
 
-def make_base_moves(rng: random.Random, now: dt.datetime, count: int, start_no: int):
-    """Zbior bazowy: ~`count` ruchow z ostatnich 30 dni."""
+def make_event(rng: random.Random, ledger: Ledger, when: dt.datetime, next_no: int) -> list:
+    """Jedno zdarzenie magazynowe: zero, jeden albo dwa wiersze ksiegi.
+
+    PZ dokłada na plac przyjec, SORT przenosi z placu do boksu (dwa wiersze,
+    jak przesuniecie miedzymagazynowe), WZ zdejmuje z boksu. Kazdy ruch bierze
+    tylko tyle, ile naprawde lezy - brak towaru oznacza, ze zdarzenie nie
+    dochodzi do skutku.
+    """
+    roll = rng.random()
+
+    if roll < 0.34:                                    # PZ - przyjecie odpadu
+        stockid = rng.choice(list(FRACTION_LOC))
+        qty = round(rng.uniform(800, 9000), 2)
+        ledger.add(stockid, RECEIVING, qty)
+        return [(next_no, stockid, "PZ", RECEIVING, iso(when), rng.choice(SUPPLIERS), qty, COST[stockid])]
+
+    if roll < 0.78:                                    # SORT - wysortowanie frakcji
+        stockid = rng.choice(SORTED_FRACTIONS)
+        available = ledger.get(stockid, RECEIVING)
+        if available < 300:
+            return []
+        qty = round(min(available, rng.uniform(1200, 7000)), 2)
+        loccode = FRACTION_LOC[stockid]
+        ledger.add(stockid, RECEIVING, -qty)
+        ledger.add(stockid, loccode, qty)
+        return [
+            (next_no, stockid, "SORT", RECEIVING, iso(when), None, -qty, COST[stockid]),
+            (next_no + 1, stockid, "SORT", loccode, iso(when), None, qty, COST[stockid]),
+        ]
+
+    stockid = rng.choice(list(FRACTION_BUYER))         # WZ - wydanie do odbiorcy
+    loccode = FRACTION_LOC[stockid]
+    available = ledger.get(stockid, loccode)
+    if available < 500:
+        return []
+    qty = round(min(available, rng.uniform(500, 12000)), 2)
+    ledger.add(stockid, loccode, -qty)
+    return [(next_no, stockid, "WZ", loccode, iso(when), FRACTION_BUYER[stockid], -qty, COST[stockid])]
+
+
+def make_base_moves(rng: random.Random, ledger: Ledger, now: dt.datetime, count: int, start_no: int):
+    """Zbior bazowy: co najmniej `count` wierszy ksiegi z ostatnich 30 dni.
+
+    Zdarzenia ida chronologicznie, bo saldo magazynu musi sie zgadzac w kazdej
+    chwili. Kilka pierwszych prob sortowania i wydania spala na panewce
+    (magazyn jest jeszcze pusty) - dokladnie tak, jak w prawdziwej ksiedze.
+    """
+    stamps = sorted(now - dt.timedelta(days=rng.uniform(0.5, 30.0)) for _ in range(count))
     moves = []
-    no = start_no
-    for _ in range(count):
-        offset = rng.uniform(0.5, 30.0)           # dni wstecz
-        when = now - dt.timedelta(days=offset)
-        roll = rng.random()
-        if roll < 0.40:                            # PZ - przyjecie odpadu zmieszanego
-            stockid = rng.choice(list(FRACTION_LOC))
-            qty = round(rng.uniform(800, 9000), 2)
-            move = (no, stockid, "PZ", "PRZYJ", iso(when), rng.choice(SUPPLIERS), qty, COST[stockid])
-        elif roll < 0.80:                          # SORT - wysortowanie frakcji
-            stockid = rng.choice(list(FRACTION_LOC))
-            qty = round(rng.uniform(300, 4500), 2)
-            move = (no, stockid, "SORT", FRACTION_LOC[stockid], iso(when), None, qty, COST[stockid])
-        else:                                      # WZ - wydanie do odbiorcy (qty ujemne)
-            stockid = rng.choice(list(FRACTION_BUYER))
-            qty = -round(rng.uniform(500, 12000), 2)
-            move = (no, stockid, "WZ", FRACTION_LOC[stockid], iso(when), FRACTION_BUYER[stockid], qty, COST[stockid])
-        moves.append(move)
-        no += 1
-    moves.sort(key=lambda m: m[4])
-    # Numery ruchow rosna razem z data, jak w ksiedze prowadzonej chronologicznie.
-    return [(start_no + i,) + m[1:] for i, m in enumerate(moves)]
+    for when in stamps:
+        moves.extend(make_event(rng, ledger, when, start_no + len(moves)))
+    return moves
 
 
-def make_reserve_moves(rng: random.Random, now: dt.datetime, count: int, start_no: int, step_seconds: int):
+def make_reserve_moves(rng: random.Random, ledger: Ledger, now: dt.datetime, count: int,
+                       start_no: int, step_seconds: int):
     """Zbior zapasowy: ruchy ze znacznikami czasu w przyszlosci.
 
-    Spooler zrzuca do wsad/ tylko te ruchy, ktorych trandate juz minela, wiec
-    plik rosnie w czasie, a kolejne uruchomienia klienta znajduja nowe rekordy
+    Startuje od salda, ktore zostawil zbior bazowy, wiec magazyn nie schodzi
+    ponizej zera takze po ujawnieniu tych ruchow. Spooler zrzuca do wsad/
+    tylko te, ktorych trandate juz minela, wiec plik rosnie w czasie
     - to daje efekt zywej synchronizacji przyrostowej.
     """
     moves = []
-    for i in range(count):
-        when = now + dt.timedelta(seconds=step_seconds * (i + 1))
-        roll = rng.random()
-        if roll < 0.45:
-            stockid = rng.choice(list(FRACTION_LOC))
-            qty = round(rng.uniform(900, 7000), 2)
-            move = (start_no + i, stockid, "PZ", "PRZYJ", iso(when), rng.choice(SUPPLIERS), qty, COST[stockid])
-        elif roll < 0.85:
-            stockid = rng.choice(list(FRACTION_LOC))
-            qty = round(rng.uniform(400, 3800), 2)
-            move = (start_no + i, stockid, "SORT", FRACTION_LOC[stockid], iso(when), None, qty, COST[stockid])
-        else:
-            stockid = rng.choice(list(FRACTION_BUYER))
-            qty = -round(rng.uniform(600, 9000), 2)
-            move = (start_no + i, stockid, "WZ", FRACTION_LOC[stockid], iso(when), FRACTION_BUYER[stockid], qty, COST[stockid])
-        moves.append(move)
+    tick = 0
+    while len(moves) < count:
+        tick += 1
+        when = now + dt.timedelta(seconds=step_seconds * tick)
+        moves.extend(make_event(rng, ledger, when, start_no + len(moves)))
     return moves
 
 
@@ -176,9 +219,11 @@ def build(db_path: pathlib.Path, base_moves_count: int, reserve_moves_count: int
     conn.executemany("INSERT INTO stockmaster VALUES (?,?,?,?,?,?)", STOCKS)
     conn.executemany("INSERT INTO locations VALUES (?,?,?)", LOCATIONS)
 
-    base_moves = make_base_moves(rng, now, base_moves_count, start_no=100001)
+    ledger = Ledger()
+    base_moves = make_base_moves(rng, ledger, now, base_moves_count, start_no=100001)
     reserve_moves = make_reserve_moves(
-        rng, now, reserve_moves_count, start_no=100001 + len(base_moves), step_seconds=reserve_step
+        rng, ledger, now, reserve_moves_count, start_no=100001 + len(base_moves),
+        step_seconds=reserve_step
     )
     conn.executemany("INSERT INTO stockmoves VALUES (?,?,?,?,?,?,?,?)", base_moves + reserve_moves)
 
