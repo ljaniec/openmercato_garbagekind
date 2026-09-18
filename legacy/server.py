@@ -11,11 +11,14 @@ Mowi dialektem XML-RPC prawdziwego webERP:
 UCZCIWA ETYKIETA: to nie jest webERP. To system legacy mowiacy XML-RPC
 (protokolem z 1998 roku), odwzorowany na podstawie rzeczywistego API webERP.
 
-Metody odwzorowane z webERP:
+Powierzchnia XML-RPC zawiera WYLACZNIE metody istniejace w webERP:
     xmlrpc_Login, xmlrpc_GetCustomer, xmlrpc_GetLocationList,
     xmlrpc_GetLocationDetails, xmlrpc_GetStockBalance, xmlrpc_GetSalesOrderHeader
-Metody dodane na potrzeby tego systemu (NIE MA ICH w webERP):
-    xmlrpc_GetCustomerList, xmlrpc_GetStockList, xmlrpc_GetStockMovesSince
+
+Zadnych metod wymyslonych. Dane, ktorych webERP przez XML-RPC nie wystawia
+(katalog kontrahentow, katalog frakcji, ksiega ruchow), ida kanalem plikowym:
+system legacy zrzuca je do katalogu wsad/ jako CSV i "excelka" - patrz
+legacy/generate.py i legacy/spooler.py.
 
 Uruchomienie:
     python3 legacy/server.py --db legacy/sortownia.db --port 8088
@@ -143,27 +146,18 @@ class LegacyApi:
         found = self.db.one("SELECT * FROM salesorders WHERE orderno = ?", (int(orderno),))
         return found if found is not None else NOT_FOUND
 
-    # --- dodane na potrzeby tego systemu (nie ma ich w webERP) ----------------
 
-    def GetCustomerList(self):
-        return self.db.rows("SELECT * FROM debtorsmaster ORDER BY debtorno")
-
-    def GetStockList(self):
-        return self.db.rows("SELECT * FROM stockmaster ORDER BY stockid")
-
-    def GetStockMovesSince(self, iso_timestamp):
-        """Ruchy nowsze niz podany czas, ale nie z przyszlosci.
-
-        Ruchy ze zbioru zapasowego maja znaczniki czasu ustawione do przodu;
-        filtr `trandate <= teraz` sprawia, ze ujawniaja sie stopniowo.
-        """
-        since = str(iso_timestamp).strip() or "1970-01-01T00:00:00"
-        return self.db.rows(
-            "SELECT * FROM stockmoves WHERE trandate > ? AND trandate <= ? ORDER BY trandate, stkmoveno",
-            (since, _now().isoformat()),
-        )
-
-
+# Jawna lista dozwolonych metod: dokladnie to, co wystawia webERP, ani jednej wiecej.
+# Dyspozytor nie siega po nic spoza tego zbioru, wiec nazwa metody z zadania nie
+# moze trafic w dowolny atrybut obiektu API.
+ALLOWED_METHODS = {
+    "Login",
+    "GetCustomer",
+    "GetLocationList",
+    "GetLocationDetails",
+    "GetStockBalance",
+    "GetSalesOrderHeader",
+}
 PUBLIC_METHODS = {"Login"}
 
 
@@ -203,6 +197,7 @@ class XmlRpcHandler(BaseHTTPRequestHandler):
             "Legacy sortownia - endpoint XML-RPC: POST "
             f"{ENDPOINT_PATH}\n"
             "To nie jest webERP: to system legacy mowiacy dialektem XML-RPC webERP.\n"
+            "Makieta interfejsu uzytkownika: webui/simag.html\n"
         ).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -228,8 +223,8 @@ class XmlRpcHandler(BaseHTTPRequestHandler):
             return
 
         short = method_name.split("xmlrpc_")[-1] if "xmlrpc_" in method_name else None
-        handler = getattr(self.api, short, None) if short else None
-        if handler is None or short.startswith("_"):
+        handler = getattr(self.api, short, None) if short in ALLOWED_METHODS else None
+        if handler is None:
             self._send(xmlrpc.client.dumps(
                 xmlrpc.client.Fault(-32601, f"Nieznana metoda: {method_name}"), methodresponse=True
             ).encode("utf-8"))
