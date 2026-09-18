@@ -2,27 +2,31 @@
 """Testy kryteriow gotowosci z rozdzialu 6 specyfikacji.
 
 Uruchomienie:
-    python3 -m unittest discover -s tests -v
+    python3 -m unittest discover -s tests -t . -v
 """
 
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import pathlib
 import sys
 import tempfile
 import threading
-import time
 import unittest
 import xmlrpc.client
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from client.weberp_sync import sync  # noqa: E402
-from legacy import generate, server  # noqa: E402
+from client.weberp_sync import CookieTransport, LegacyClient, sync  # noqa: E402
+from legacy import generate, server, spooler, xlsx  # noqa: E402
 
-RESERVE_STEP = 2   # sekundy: ruchy zapasowe ujawniaja sie szybko, zeby test byl krotki
+RESERVE_STEP = 3   # sekundy: ruchy zapasowe ujawniaja sie szybko, zeby test byl krotki
+
+# Metody, ktorych w prawdziwym webERP nie ma. Kiedys byly tu zaslepki; zostaly
+# usuniete, a ten test pilnuje, zeby nie wrocily tylnymi drzwiami.
+INVENTED_METHODS = ["GetCustomerList", "GetStockList", "GetStockMovesSince"]
 
 
 class EndToEndTest(unittest.TestCase):
@@ -31,8 +35,10 @@ class EndToEndTest(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.root = pathlib.Path(cls.tmp.name)
         cls.db = cls.root / "sortownia.db"
-        # Kryterium: generator tworzy baze bez bledu.
-        generate.build(cls.db, base_moves_count=200, reserve_moves_count=60, reserve_step=RESERVE_STEP)
+        cls.wsad = cls.root / "wsad"
+        # Kryterium: generator tworzy baze i zrzut plikowy bez bledu.
+        generate.build(cls.db, base_moves_count=200, reserve_moves_count=60,
+                       reserve_step=RESERVE_STEP, wsad_dir=cls.wsad)
 
         cls.httpd = server.serve(cls.db, "127.0.0.1", 0, quiet=True)
         cls.port = cls.httpd.server_address[1]
@@ -49,8 +55,9 @@ class EndToEndTest(unittest.TestCase):
     def proxy(self) -> xmlrpc.client.ServerProxy:
         return xmlrpc.client.ServerProxy(self.url, allow_none=True)
 
+    # --- powierzchnia XML-RPC ------------------------------------------------
+
     def test_login_sets_session_cookie(self) -> None:
-        from client.weberp_sync import CookieTransport
         transport = CookieTransport()
         with xmlrpc.client.ServerProxy(self.url, transport=transport, allow_none=True) as proxy:
             self.assertEqual(0, proxy.weberp.xmlrpc_Login("demo", "demo", "weberpdemo"))
@@ -60,28 +67,58 @@ class EndToEndTest(unittest.TestCase):
         with self.proxy() as proxy:
             self.assertEqual(server.LOGIN_BAD_CREDENTIALS,
                              proxy.weberp.xmlrpc_Login("demo", "zle", "weberpdemo"))
-            self.assertEqual(server.LOGIN_BAD_COMPANY, proxy.weberp.xmlrpc_Login("demo", "demo", "inna"))
+            self.assertEqual(server.LOGIN_BAD_COMPANY,
+                             proxy.weberp.xmlrpc_Login("demo", "demo", "inna"))
 
     def test_calls_without_session_return_minus_one(self) -> None:
         with self.proxy() as proxy:
-            self.assertEqual(-1, proxy.weberp.xmlrpc_GetCustomerList())
             self.assertEqual(-1, proxy.weberp.xmlrpc_GetCustomer("D001"))
             self.assertEqual(-1, proxy.weberp.xmlrpc_GetLocationList())
             self.assertEqual(-1, proxy.weberp.xmlrpc_GetLocationDetails("BOKS1"))
-            self.assertEqual(-1, proxy.weberp.xmlrpc_GetStockList())
             self.assertEqual(-1, proxy.weberp.xmlrpc_GetStockBalance("20 01 01", "BOKS1"))
-            self.assertEqual(-1, proxy.weberp.xmlrpc_GetStockMovesSince("1970-01-01T00:00:00"))
             self.assertEqual(-1, proxy.weberp.xmlrpc_GetSalesOrderHeader(5001))
+
+    def test_surface_has_only_real_weberp_methods(self) -> None:
+        """Metody, ktorych webERP nie ma, nie moga istniec takze tutaj."""
+        transport = CookieTransport()
+        with xmlrpc.client.ServerProxy(self.url, transport=transport, allow_none=True) as proxy:
+            self.assertEqual(0, proxy.weberp.xmlrpc_Login("demo", "demo", "weberpdemo"))
+            for name in INVENTED_METHODS:
+                with self.subTest(method=name), self.assertRaises(xmlrpc.client.Fault):
+                    getattr(proxy.weberp, f"xmlrpc_{name}")()
 
     def test_unknown_method_is_a_fault(self) -> None:
         with self.proxy() as proxy, self.assertRaises(xmlrpc.client.Fault):
             proxy.weberp.xmlrpc_GetNothing()
 
+    # --- zrzut plikowy -------------------------------------------------------
+
+    def test_file_drop_is_readable(self) -> None:
+        moves = xlsx.read(self.wsad / spooler.MOVES_FILE)
+        self.assertGreaterEqual(len(moves), 200)
+        self.assertEqual(set(spooler.MOVES_HEADER), set(moves[0].keys()))
+        now = dt.datetime.now().isoformat()
+        for move in moves:
+            self.assertLessEqual(move["trandate"], now, "zrzut zawiera ruch z przyszlosci")
+
+    def test_drop_grows_over_time(self) -> None:
+        before = len(xlsx.read(self.wsad / spooler.MOVES_FILE))
+        later = dt.datetime.now() + dt.timedelta(seconds=RESERVE_STEP * 5)
+        spooler.export_moves(self.db, self.wsad, as_of=later)
+        after = len(xlsx.read(self.wsad / spooler.MOVES_FILE))
+        self.assertGreater(after, before, "kolejny zrzut nie przyniosl nowych ruchow")
+        # Przywracamy stan biezacy, zeby inne testy nie zalezaly od kolejnosci.
+        spooler.export_moves(self.db, self.wsad)
+
+    # --- integracja ----------------------------------------------------------
+
     def test_full_then_incremental_sync(self) -> None:
         out = self.root / "out"
+        spooler.export_moves(self.db, self.wsad)   # zrzut na "teraz"
 
-        first = sync(self.url, out, "demo", "demo", "weberpdemo", full=True, verbose=False)
-        for name in ("kontrahenci.csv", "frakcje.csv", "lokalizacje.csv", "stany.csv", "ruchy.csv", ".last_sync"):
+        first = sync(self.url, out, "demo", "demo", "weberpdemo", self.wsad, full=True, verbose=False)
+        for name in ("kontrahenci.csv", "frakcje.csv", "lokalizacje.csv", "stany.csv",
+                     "ruchy.csv", ".last_sync"):
             self.assertTrue((out / name).exists(), f"brak pliku {name}")
         self.assertEqual(8, first["kontrahenci"])
         self.assertEqual(6, first["frakcje"])
@@ -91,15 +128,17 @@ class EndToEndTest(unittest.TestCase):
         rows_first = self._moves(out)
         self.assertEqual(first["ruchy_nowe"], len(rows_first))
 
-        # Kryterium: drugie uruchomienie pobiera tylko nowe ruchy.
-        time.sleep(RESERVE_STEP * 2 + 1)
-        second = sync(self.url, out, "demo", "demo", "weberpdemo", verbose=False)
+        # Legacy dokleja do zrzutu kolejna porcje ruchow...
+        spooler.export_moves(self.db, self.wsad,
+                             as_of=dt.datetime.now() + dt.timedelta(seconds=RESERVE_STEP * 5))
+        # ...a drugie uruchomienie klienta bierze tylko je.
+        second = sync(self.url, out, "demo", "demo", "weberpdemo", self.wsad, verbose=False)
         self.assertGreater(second["ruchy_nowe"], 0, "tryb przyrostowy nie znalazl nowych ruchow")
         self.assertLess(second["ruchy_pobrane"], first["ruchy_pobrane"],
                         "tryb przyrostowy pobral tyle samo co pelny")
 
         rows_second = self._moves(out)
-        ids = [r["stkmoveno"] for r in rows_second]
+        ids = [row["stkmoveno"] for row in rows_second]
         self.assertEqual(len(ids), len(set(ids)), "import zduplikowal ruchy")
         self.assertEqual(len(rows_first) + second["ruchy_nowe"], len(rows_second), "import zgubil ruchy")
 
@@ -107,15 +146,14 @@ class EndToEndTest(unittest.TestCase):
         for row in rows_second[:20]:
             self.assertAlmostEqual(float(row["ilosc_kg"]) / 1000.0, float(row["ilosc_mg"]), places=2)
 
-    def test_no_future_moves_are_leaked(self) -> None:
-        from client.weberp_sync import LegacyClient
-        client = LegacyClient(self.url, verbose=False)
-        client.login("demo", "demo", "weberpdemo")
-        import datetime as dt
-        now = dt.datetime.now().isoformat()
-        for move in client.moves_since("1970-01-01T00:00:00"):
-            self.assertLessEqual(move["trandate"], now, "serwer ujawnil ruch z przyszlosci")
-        client.close()
+        spooler.export_moves(self.db, self.wsad)
+
+    def test_client_uses_only_real_methods(self) -> None:
+        """Klient nie ma metody, ktorej nie ma webERP."""
+        for name in INVENTED_METHODS:
+            attribute = name[0].lower() + name[1:]
+            self.assertFalse(hasattr(LegacyClient, attribute),
+                             f"klient odwoluje sie do nieistniejacej metody {name}")
 
     @staticmethod
     def _moves(out: pathlib.Path) -> list[dict]:
