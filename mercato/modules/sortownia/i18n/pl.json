@@ -1,0 +1,7 @@
+{
+  "sortownia.title": "Sortownia",
+  "sortownia.dashboard.title": "Pulpit sortowni",
+  "sortownia.dashboard.description": "Zapełnienie boksów, przepływ frakcji i ostatnie ruchy przeniesione z systemu legacy.",
+  "sortownia.sync.params.dryRun": "Przebieg próbny",
+  "sortownia.sync.params.dryRun.description": "Policz, co weszłoby do magazynu, bez zapisu ruchów."
+}

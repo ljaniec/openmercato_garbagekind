@@ -1,0 +1,7 @@
+{
+  "sortownia.title": "Waste sorting",
+  "sortownia.dashboard.title": "Sorting plant dashboard",
+  "sortownia.dashboard.description": "Bin utilisation, fraction flow and the latest movements carried over from the legacy system.",
+  "sortownia.sync.params.dryRun": "Dry run",
+  "sortownia.sync.params.dryRun.description": "Count what would enter the warehouse without writing movements."
+}
