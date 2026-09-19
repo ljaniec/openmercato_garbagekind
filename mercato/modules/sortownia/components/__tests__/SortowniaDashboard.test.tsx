@@ -68,6 +68,13 @@ const payload = {
       { nazwa: 'PlastMet Sp. z o.o.', netPln: 15002.25, orders: 9 },
     ],
   },
+  traceability: {
+    lots: 95,
+    suppliers: [
+      { dostawca: 'Gmina Wieliszew', lots: 31, receivedKg: 142300 },
+      { dostawca: 'PPHU Transbud', lots: 22, receivedKg: 98150 },
+    ],
+  },
   movements: [
     {
       id: 'm1',
@@ -220,6 +227,21 @@ describe('SortowniaDashboard', () => {
     render(<SortowniaDashboard />)
     await screen.findByText('Sprzedaż frakcji')
     expect(screen.getByText('wszystko rozliczone')).toBeInTheDocument()
+  })
+
+  it('pokazuje, czyj odpad przyjechał — tego stary system nie wiedział wcale', async () => {
+    render(<SortowniaDashboard />)
+    expect(await screen.findByText('Pochodzenie odpadu')).toBeInTheDocument()
+    expect(screen.getByText('Gmina Wieliszew')).toBeInTheDocument()
+    expect(screen.getByText('95 partii')).toBeInTheDocument()
+    expect(screen.getByText('142,300 Mg')).toBeInTheDocument()
+  })
+
+  it('nie pokazuje pochodzenia, gdy partii jeszcze nie ma', async () => {
+    respondWith({ ...payload, traceability: { lots: 0, suppliers: [] } })
+    render(<SortowniaDashboard />)
+    await screen.findByText('Na placu przyjęć')
+    expect(screen.queryByText('Pochodzenie odpadu')).not.toBeInTheDocument()
   })
 
   it('pokazuje przepływ frakcji jako wykres', async () => {

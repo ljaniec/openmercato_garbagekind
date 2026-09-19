@@ -359,6 +359,28 @@ export async function GET(req: Request): Promise<Response> {
     ]),
   )
 
+  // Identyfikowalność: skąd wzięła się masa na placu. Partie zakładane są
+  // przy przyjęciu i niosą dostawcę w metadanych, więc pytanie „czyj to odpad"
+  // ma odpowiedź w magazynie, a nie w pamięci brygadzisty.
+  const suppliers = await em.getConnection().execute<Array<{
+    dostawca: string
+    lots: string
+    masa: string
+  }>>(
+    `select coalesce(l.metadata->>'dostawca', 'nieznany') as dostawca,
+            count(*) as lots,
+            coalesce(sum((l.metadata->>'masaPrzyjeciaKg')::numeric), 0) as masa
+       from wms_inventory_lots l
+      where l.organization_id = ?
+        and l.tenant_id = ?
+        and l.deleted_at is null
+        and l.lot_number like 'PZ/%'
+      group by 1
+      order by sum((l.metadata->>'masaPrzyjeciaKg')::numeric) desc
+      limit 6`,
+    [scope.organizationId, scope.tenantId],
+  )
+
   const yardKg = locationRows
     .filter((row) => row.type === 'staging')
     .reduce((sum, row) => sum + (row.quantityKg ?? 0), 0)
@@ -387,6 +409,14 @@ export async function GET(req: Request): Promise<Response> {
         issuedKg: Number.parseFloat(row.issued),
       })),
       movements: movementRows,
+      traceability: {
+        lots: suppliers.reduce((sum, row) => sum + Number.parseInt(row.lots, 10), 0),
+        suppliers: suppliers.map((row) => ({
+          dostawca: row.dostawca,
+          lots: Number.parseInt(row.lots, 10),
+          receivedKg: Number.parseFloat(row.masa),
+        })),
+      },
       sales: {
         orders: Number.parseInt(sales?.orders ?? '0', 10),
         invoices: Number.parseInt(sales?.invoices ?? '0', 10),

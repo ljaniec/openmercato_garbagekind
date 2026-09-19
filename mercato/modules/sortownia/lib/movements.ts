@@ -47,6 +47,13 @@ export type MovementContext = {
    * zostaje samą korektą, tak jak było wcześniej.
    */
   salesOrders?: Map<number, string>
+  /**
+   * `stkmoveno` przyjęcia → identyfikator partii w WMS.
+   *
+   * Pusty indeks jest poprawny: import ruchów wolno puścić bez partii, wtedy
+   * przyjęcie zostaje bezimienną masą, tak jak w starym systemie.
+   */
+  lots?: Map<number, string>
 }
 
 /** Para wierszy SORT: zejście z placu i przyjęcie na boks. */
@@ -106,6 +113,31 @@ async function alreadyApplied(
   return existing !== null
 }
 
+/**
+ * Czy ten wiersz legacy jest już w magazynie — niezależnie od kształtu klucza WMS.
+ *
+ * Klucz idempotencji WMS obejmuje `lotId`, więc od chwili, gdy przyjęcia zaczęły
+ * wskazywać partię, ten sam wiersz `PZ` liczy się inaczej niż przed zmianą.
+ * Kontrola wyłącznie po kluczu uznałaby każde wcześniej zaimportowane przyjęcie
+ * za nowe i zdublowała całą księgę przy pierwszym imporcie po wdrożeniu partii.
+ *
+ * `referenceId` jest naszym własnym, deterministycznym odciskiem `stkmoveno`
+ * i nie zmienia się nigdy — dlatego to on rozstrzyga, czy wiersz już wszedł.
+ */
+async function alreadyImported(
+  ctx: MovementContext,
+  referenceId: string,
+  type: 'receipt' | 'transfer' | 'adjust',
+): Promise<boolean> {
+  const existing = await ctx.em.findOne(InventoryMovement, {
+    referenceId,
+    type,
+    organizationId: ctx.scope.organizationId,
+    tenantId: ctx.scope.tenantId,
+  } as never)
+  return existing !== null
+}
+
 function parseMoment(value: string): Date {
   const parsed = new Date(value)
   return Number.isNaN(parsed.getTime()) ? new Date() : parsed
@@ -119,20 +151,13 @@ async function applyReceipt(ctx: MovementContext, row: LegacyMovementRow): Promi
 
   const performedAt = parseMoment(row.data)
   const referenceId = legacyUuid('movement', row.stkmoveno)
-  if (
-    await alreadyApplied(ctx, {
-      referenceType: 'po',
-      referenceId,
-      type: 'receipt',
-      warehouseId: ctx.warehouseId,
-      locationToId: location.id,
-      catalogVariantId: fraction.variantId,
-      quantity: Math.abs(row.iloscKg),
-    })
-  ) {
+  // Przyjęcie wskazuje partię, a `lotId` wchodzi do klucza idempotencji WMS,
+  // więc rozstrzygamy po `referenceId` — patrz komentarz przy `alreadyImported`.
+  if (await alreadyImported(ctx, referenceId, 'receipt')) {
     return true
   }
 
+  const lotId = ctx.lots?.get(row.stkmoveno)
   await ctx.commandBus.execute('wms.inventory.receive', {
     input: {
       organizationId: ctx.scope.organizationId,
@@ -141,13 +166,19 @@ async function applyReceipt(ctx: MovementContext, row: LegacyMovementRow): Promi
       locationId: location.id,
       catalogVariantId: fraction.variantId,
       quantity: Math.abs(row.iloscKg),
+      // Partia niesie dostawcę i datę przyjęcia — bez niej przyjęcie jest
+      // bezimienną masą i nie da się odpowiedzieć, czyj odpad gdzie trafił.
+      lotId,
       referenceType: 'po',
       referenceId,
       performedBy: ctx.performedBy,
       performedAt,
       receivedAt: performedAt,
       reason: `Przyjęcie odpadu z systemu legacy (PZ ${row.stkmoveno}${row.debtorno ? `, dostawca ${row.debtorno}` : ''})`,
-      metadata: { legacy: { stkmoveno: row.stkmoveno, typ: row.typ, debtorno: row.debtorno || null } },
+      metadata: {
+        legacy: { stkmoveno: row.stkmoveno, typ: row.typ, debtorno: row.debtorno || null },
+        lotNumber: lotId ? `PZ/${row.stkmoveno}` : null,
+      },
     },
     ctx: ctx.commandContext,
   })

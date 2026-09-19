@@ -59,6 +59,12 @@ function defaultQueries(sql: string): unknown[] {
   if (sql.includes('group by o.customer_entity_id')) {
     return [{ customer_entity_id: 'ent-5', net: '120797.63', orders: '12' }]
   }
+  if (sql.includes('from wms_inventory_lots l')) {
+    return [
+      { dostawca: 'Gmina Wieliszew', lots: '31', masa: '142300' },
+      { dostawca: 'nieznany', lots: '2', masa: '5000' },
+    ]
+  }
   if (sql.includes('with faktury as')) {
     return [{ billed: '187417.79', paid: '35024.11', overdue_docs: '36', oldest_days: '28' }]
   }
@@ -224,6 +230,16 @@ describe('GET /api/sortownia/dashboard — dane', () => {
     const body = await readBody(await GET(makeRequest()))
     // Surowy odczyt `display_name` oddaje kryptogram i ląduje on na ekranie.
     expect(body.sales.topBuyers[0].nazwa).toBe('Stora Papier Recykling')
+  })
+
+  it('oddaje pochodzenie odpadu z partii magazynowych', async () => {
+    const body = await readBody(await GET(makeRequest()))
+    expect(body.traceability.lots).toBe(33)
+    expect(body.traceability.suppliers[0]).toMatchObject({
+      dostawca: 'Gmina Wieliszew',
+      lots: 31,
+      receivedKg: 142300,
+    })
   })
 
   it('pokazuje jako frakcje wyłącznie pozycje przyniesione przez import z legacy', async () => {

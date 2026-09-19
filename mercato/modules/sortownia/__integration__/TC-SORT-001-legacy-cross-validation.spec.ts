@@ -51,6 +51,10 @@ type DashboardPayload = {
   locations: Array<{ code: string; type: string; quantityKg: number | null; capacityKg: number | null; utilisation: number | null }>
   fractions: Array<{ sku: string; quantityKg: number }>
   movements: Array<{ type: string; legacyMoveNo: number | string | null }>
+  traceability?: {
+    lots: number
+    suppliers: Array<{ dostawca: string; lots: number; receivedKg: number }>
+  }
   sales?: {
     orders: number
     invoices: number
@@ -360,6 +364,37 @@ test.describe('TC-SORT-001 — zgodność Open Mercato z księgą systemu legacy
   test('wystawiona kwota brutto zgadza się z sumą faktur', async ({ request }) => {
     const dashboard = await loadDashboard(request)
     expect(dashboard.sales?.billedPln ?? 0).toBeCloseTo(dashboard.sales?.grossPln ?? 0, 1)
+  })
+
+  test('każde przyjęcie ma swoją partię — bez tego nie wiadomo, czyj odpad leży na placu', async ({ request }) => {
+    const ledger = await readLegacyLedger()
+    const przyjecia = ledger.filter((row) => row.typ === 'PZ').length
+    const dashboard = await loadDashboard(request)
+    expect(dashboard.traceability?.lots).toBe(przyjecia)
+  })
+
+  test('masa w partiach zgadza się z sumą przyjęć w księdze legacy', async ({ request }) => {
+    const ledger = await readLegacyLedger()
+    const przyjeteKg = ledger
+      .filter((row) => row.typ === 'PZ')
+      .reduce((sum, row) => sum + Math.abs(row.iloscKg), 0)
+    const dashboard = await loadDashboard(request)
+    const wPartiach = (dashboard.traceability?.suppliers ?? []).reduce(
+      (sum, row) => sum + row.receivedKg,
+      0,
+    )
+    expect(wPartiach).toBeCloseTo(przyjeteKg, 1)
+  })
+
+  test('partia niesie nazwę dostawcy, a nie kod z legacy ani puste pole', async ({ request }) => {
+    const dashboard = await loadDashboard(request)
+    const suppliers = dashboard.traceability?.suppliers ?? []
+    expect(suppliers.length).toBeGreaterThan(0)
+    for (const row of suppliers) {
+      // `D001` oznaczałoby, że kontrahent nie został odnaleziony w CRM.
+      expect.soft(row.dostawca, 'dostawca pokazany kodem legacy').not.toMatch(/^D\d{3}$/)
+      expect.soft(row.dostawca, 'dostawca bez nazwy').not.toBe('nieznany')
+    }
   })
 
   test('konwersja kilogramów na megagramy jest spójna w całej księdze legacy', async () => {

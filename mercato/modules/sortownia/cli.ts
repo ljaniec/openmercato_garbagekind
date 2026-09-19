@@ -25,6 +25,7 @@ import { ensureCustomers } from './lib/customers'
 import { ensureFractions, loadFractionIndex } from './lib/fractions'
 import { applySalesOrders } from './lib/salesOrders'
 import { applyPayments } from './lib/payments'
+import { ensureLots } from './lib/lots'
 import { applyMovementBatch, type MovementContext } from './lib/movements'
 import { ensureTopology, loadLocationIndex } from './lib/topology'
 
@@ -198,6 +199,30 @@ const importCommand: ModuleCli = {
       salesOrders: salesOrderIndex,
     }
 
+    // Partie zakładamy przed księgą: ruch przyjęcia ma wskazać istniejącą partię.
+    const supplierNames = new Map<string, string>()
+    if (await fileExists(customersPath)) {
+      for (const row of await readCustomers(customersPath)) supplierNames.set(row.debtorno, row.nazwa)
+    }
+    const allRows: LegacyMovementRow[] = []
+    for await (const row of readMovements(movementsPath)) allRows.push(row)
+    const lotResult = await ensureLots(
+      {
+        em,
+        commandBus,
+        commandContext,
+        scope,
+        fractions: movementContext.fractions,
+        supplierNames,
+      },
+      allRows,
+    )
+    movementContext.lots = lotResult.index
+    const lotsCreated = lotResult.outcomes.filter((o) => o.action === 'create').length
+    const lotsFailed = lotResult.outcomes.filter((o) => o.action === 'failed')
+    console.log(`  partie odpadu: ${lotResult.outcomes.length} przyjęć (nowych partii ${lotsCreated})`)
+    for (const outcome of lotsFailed.slice(0, 5)) console.log(`    ! partia PZ/${outcome.stkmoveno}: ${outcome.error}`)
+
     let buffer: LegacyMovementRow[] = []
     let carry: LegacyMovementRow[] = []
     let written = 0
@@ -222,7 +247,7 @@ const importCommand: ModuleCli = {
     }
 
     let seen = 0
-    for await (const row of readMovements(movementsPath)) {
+    for (const row of allRows) {
       buffer.push(row)
       seen += 1
       if (buffer.length >= 100) await flush()
