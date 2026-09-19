@@ -69,22 +69,53 @@ Na gałęzi `reality-layer-physical-ai`:
 Sam grant nie przełącza intentu na `AUTHORIZED`. To zrobi dopiero M2 Reality
 Gate po niezależnym sprawdzeniu wszystkich warunków.
 
-## Następny krok — M2
+## M2 — Reality Gate
 
-Reality Gate ma połączyć pięć niezależnych werdyktów:
+Na gałęzi `reality-layer-m2` działa deterministyczna brama przed dispatch:
 
 ```text
-business precondition
-AND executor capability
-AND executor credential/liveness
-AND matching non-expired AuthorizationGrant
-AND deterministic physical policy
+business_precondition
+AND executor_capability
+AND executor_credential
+AND authorization_grant
+AND deterministic_policy
 ```
 
-Nieznany lub niedostępny warunek daje `BLOCKED`, nigdy „spróbujmy i zobaczymy”.
+Każdy warunek zwraca `pass`, `block` albo `unknown`. Tylko pięć `pass` daje
+`AUTHORIZED`; `unknown` jest fail-closed i daje `BLOCKED`.
 
-Pierwszym backendem pozostaje `MockExecutor`. Dzięki temu cały trust boundary
-da się przetestować zanim A1XY lub LeRobot wykona choć jeden ruch.
+Dwa backendy wykonawcy są rozpoznawane już na tym etapie:
+
+- `mock:<id>` — samodzielna ścieżka referencyjna bez zależności od modułów robotycznych;
+- `robot:<uuid>` — odczytuje bieżące fakty z `fleet`, `edge`, `deployment` i `safety` bez importowania ich encji ORM.
+
+Dla WMS gate potrafi sprawdzić bieżące `quantity_available`, a nie tylko
+`quantity_on_hand`. Dla prawdziwego robota wymaga ważnego klucza Edge,
+heartbeat w oknie `online`, aktywnego deploymentu w stanie `running` i
+ponownego przejścia `safety.clearance.check`.
+
+Najważniejsza własność czasowa: `AUTHORIZED` nie jest przywilejem na zawsze.
+Ponowna ewaluacja przed dispatch może cofnąć intent do `BLOCKED`, jeśli grant
+wygasł lub został odwołany, robot stracił łączność, stan magazynu się zmienił,
+deployment został zatrzymany albo Safety przestało dopuszczać politykę.
+
+Komenda M2:
+
+```text
+reality_layer.gate.evaluate
+```
+
+zapisuje pełny wektor werdyktów w `latestGateJson`, wybranego executora i
+przejście stanu. Nie uruchamia sprzętu — dispatch pozostaje zadaniem M3.
+
+## Następny krok — M3
+
+M3 powinno dodać asynchroniczny dispatch przez kolejkę Open Mercato,
+`ExecutionRecord`, normatywny `MockExecutor` i kontrakt wykonawcy dla
+późniejszych adapterów A1XY/LeRobot. Worker przed rozpoczęciem fizycznego
+ruchu musi ponownie sprawdzić, że intent nadal jest `AUTHORIZED` i że zapisany
+gate dotyczy tego samego executora; M3 nie może samodzielnie tworzyć grantu ani
+uzgadniać skutku z ERP.
 
 ## Lokalna weryfikacja po instalacji
 
@@ -97,5 +128,4 @@ yarn mercato auth sync-role-acls
 yarn test --testPathPatterns "modules/reality_layer"
 ```
 
-Po M2 dojdzie test end-to-end: intent zablokowany → grant człowieka → gate
-`AUTHORIZED`. Dopiero M3 doda faktyczne asynchroniczne wykonanie przez kolejkę.
+Po M2 test ścieżki referencyjnej powinien kończyć się na `AUTHORIZED` bez uruchamiania sprzętu. M3 rozszerzy tę samą ścieżkę o kolejkę i `ExecutionRecord`.
