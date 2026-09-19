@@ -46,12 +46,10 @@ yarn test --testPathPatterns "modules/reality_layer"
 Run the app with workers enabled (default development mode) or explicitly:
 
 ```bash
-yarn mercado queue worker reality-layer-execution
+yarn mercato queue worker reality-layer-execution
 ```
 
-If the CLI spelling in your Open Mercato checkout is `mercato` rather than
-`mercado`, use the generated CLI command shown by `yarn mercado --help` /
-`yarn mercato --help`; the queue name is `reality-layer-execution`.
+The queue name is `reality-layer-execution`; `yarn dev` should auto-spawn it in development.
 
 ## Command sequence
 

@@ -132,7 +132,20 @@ export const mergeRealityDiffCommand: CommandHandler<
       await em.flush()
     }
 
-    const effect = wmsEffectSchema.parse(diff.effectInputJson)
+    const parsedEffect = wmsEffectSchema.safeParse(diff.effectInputJson)
+    if (!parsedEffect.success) {
+      if (diff.status === 'merging') {
+        assertDiffTransition(diff.status, 'merge_failed')
+        diff.status = 'merge_failed'
+      } else {
+        assertDiffTransition(diff.status, 'needs_evidence')
+        diff.status = 'needs_evidence'
+      }
+      diff.failureCode = 'effect_input_invalid'
+      await em.flush()
+      return { diffId: diff.id, status: diff.status }
+    }
+    const effect = parsedEffect.data
     const bus = ctx.container.resolve('commandBus') as CommandBus
 
     try {
