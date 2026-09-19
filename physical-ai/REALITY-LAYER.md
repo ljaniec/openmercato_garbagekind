@@ -108,14 +108,24 @@ reality_layer.gate.evaluate
 zapisuje pełny wektor werdyktów w `latestGateJson`, wybranego executora i
 przejście stanu. Nie uruchamia sprzętu — dispatch pozostaje zadaniem M3.
 
-## Następny krok — M3
+## MVP speedrun — M3–M5
 
-M3 powinno dodać asynchroniczny dispatch przez kolejkę Open Mercato,
-`ExecutionRecord`, normatywny `MockExecutor` i kontrakt wykonawcy dla
-późniejszych adapterów A1XY/LeRobot. Worker przed rozpoczęciem fizycznego
-ruchu musi ponownie sprawdzić, że intent nadal jest `AUTHORIZED` i że zapisany
-gate dotyczy tego samego executora; M3 nie może samodzielnie tworzyć grantu ani
-uzgadniać skutku z ERP.
+Gałąź `reality-layer-mvp-speedrun` domyka minimalny pion demonstracyjny:
+
+- M3: kolejka `reality-layer-execution`, `ExecutionRecord`, normatywny `MockExecutor`;
+- M4: append-only `EvidenceEnvelope` i deterministyczny `RealityDiff`;
+- M5: jawna decyzja człowieka i merge do `wms.inventory.move` z
+  `referenceId = RealityDiff.id` jako granicą idempotencji;
+- cienkie endpointy HTTP do sterowania MVP i odczytu całego łańcucha provenance.
+
+Worker ponownie sprawdza Reality Gate bezpośrednio przed pierwszym wykonaniem.
+`success` tworzy evidence i diff, ale nie zmienia ERP. `failure` kończy execution
+bez bezpiecznego efektu ERP. `unexpected_result` zapisuje rzeczywisty wynik i
+ustawia `effectAdapterKey = manual_review`, więc automatyczny merge jest odrzucony.
+
+Pełny runbook: [`REALITY-LAYER-MVP.md`](REALITY-LAYER-MVP.md).
+
+## Po hackathonie
 
 ## Lokalna weryfikacja po instalacji
 
