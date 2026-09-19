@@ -54,6 +54,15 @@ type DashboardPayload = {
   fractions: Array<{ sku: string; quantityKg: number }>
   movements: Array<{ type: string; legacyMoveNo: number | string | null }>
   rezerwacje?: { count: number; reservedKg: number }
+  bilans?: {
+    receivedKg: number
+    sortedKg: number
+    issuedKg: number
+    onHandKg: number
+    differenceKg: number
+    sortingRate: number | null
+    perFraction: Array<{ sku: string; netPln: number; soldKg: number; pricePerKg: number | null }>
+  }
   ewidencja?: {
     cards: number
     massKg: number
@@ -457,6 +466,44 @@ test.describe('TC-SORT-001 — zgodność Open Mercato z księgą systemu legacy
     const dashboard = await loadDashboard(request)
     expect.soft(dashboard.ewidencja?.withoutProcess ?? 0, 'karty bez kodu procesu odzysku').toBe(0)
     expect.soft(dashboard.ewidencja?.withoutBdo ?? 0, 'karty bez numeru rejestrowego odbiorcy').toBe(0)
+  })
+
+  test('bilans masy domyka się: przyjęte minus wydane równa się temu, co leży', async ({ request }) => {
+    const dashboard = await loadDashboard(request)
+    const bilans = dashboard.bilans
+    expect(bilans, 'pulpit musi raportować bilans masy').toBeDefined()
+    // To jest najostrzejszy test w całym zestawie. Jeżeli gdziekolwiek zgubi
+    // się znak, para SORT albo jednostka, masa przestanie się domykać — i nie
+    // ma innego miejsca, w którym taki błąd by się ujawnił.
+    expect(bilans!.differenceKg).toBeCloseTo(0, 1)
+    expect(bilans!.receivedKg - bilans!.issuedKg).toBeCloseTo(bilans!.onHandKg, 1)
+  })
+
+  test('masa przyjęta zgadza się z sumą PZ w księdze legacy', async ({ request }) => {
+    const ledger = await readLegacyLedger()
+    const przyjeteKg = ledger
+      .filter((row) => row.typ === 'PZ')
+      .reduce((sum, row) => sum + Math.abs(row.iloscKg), 0)
+    const dashboard = await loadDashboard(request)
+    expect(dashboard.bilans?.receivedKg ?? 0).toBeCloseTo(przyjeteKg, 1)
+  })
+
+  test('sprawność sortowania to wysortowane przez przyjęte, a nie liczba z sufitu', async ({ request }) => {
+    const dashboard = await loadDashboard(request)
+    const bilans = dashboard.bilans!
+    const expected = (bilans.sortedKg / bilans.receivedKg) * 100
+    expect(bilans.sortingRate ?? 0).toBeCloseTo(expected, 1)
+    // Sortownia, która wysortowuje więcej, niż przyjęła, produkuje masę z niczego.
+    expect(bilans.sortingRate ?? 0).toBeLessThanOrEqual(100)
+  })
+
+  test('cena za kilogram wynika z przychodu i masy każdej frakcji', async ({ request }) => {
+    const dashboard = await loadDashboard(request)
+    for (const row of dashboard.bilans?.perFraction ?? []) {
+      if (row.soldKg <= 0 || row.pricePerKg === null) continue
+      expect.soft(row.pricePerKg, `cena frakcji ${row.sku}`).toBeCloseTo(row.netPln / row.soldKg, 3)
+      expect.soft(row.pricePerKg, `cena frakcji ${row.sku} nie może być ujemna`).toBeGreaterThan(0)
+    }
   })
 
   test('konwersja kilogramów na megagramy jest spójna w całej księdze legacy', async () => {

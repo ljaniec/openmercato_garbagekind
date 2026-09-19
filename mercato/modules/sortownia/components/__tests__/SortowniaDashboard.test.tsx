@@ -68,6 +68,18 @@ const payload = {
       { nazwa: 'PlastMet Sp. z o.o.', netPln: 15002.25, orders: 9 },
     ],
   },
+  bilans: {
+    receivedKg: 437131.25,
+    sortedKg: 296998.37,
+    issuedKg: 236353.44,
+    onHandKg: 200777.81,
+    differenceKg: 0,
+    sortingRate: 67.9,
+    perFraction: [
+      { sku: 'Frakcja 15 01 02', netPln: 79147.27, soldKg: 50980.5, pricePerKg: 1.5525 },
+      { sku: 'Frakcja 20 01 01', netPln: 29069.34, soldKg: 67290.1, pricePerKg: 0.432 },
+    ],
+  },
   rezerwacje: { count: 5, reservedKg: 24500 },
   ewidencja: { cards: 40, massKg: 164910, withoutProcess: 0, withoutBdo: 0 },
   traceability: {
@@ -257,6 +269,26 @@ describe('SortowniaDashboard', () => {
     render(<SortowniaDashboard />)
     await screen.findByText('W boksach')
     expect(screen.getByText('Gotowe do wydania odbiorcom')).toBeInTheDocument()
+  })
+
+  it('pokazuje bilans masy i mówi wprost, że się domyka', async () => {
+    render(<SortowniaDashboard />)
+    expect(await screen.findByText('Bilans masy i sprawność sortowania')).toBeInTheDocument()
+    expect(screen.getByText('bilans domyka się')).toBeInTheDocument()
+    expect(screen.getByText('67.9%')).toBeInTheDocument()
+  })
+
+  it('alarmuje, gdy bilans się nie domyka — ubytek masy to nie drobiazg', async () => {
+    respondWith({ ...payload, bilans: { ...payload.bilans, differenceKg: 1240.5 } })
+    render(<SortowniaDashboard />)
+    await screen.findByText('Bilans masy i sprawność sortowania')
+    expect(screen.getByText(/różnica 1,241 Mg — sprawdź ewidencję/)).toBeInTheDocument()
+  })
+
+  it('pokazuje przychód per frakcja z ceną za kilogram', async () => {
+    render(<SortowniaDashboard />)
+    await screen.findByText('Przychód per frakcja')
+    expect(screen.getByText(/1\.55 zł\/kg/)).toBeInTheDocument()
   })
 
   it('pokazuje ewidencję przekazań odpadu', async () => {

@@ -19,6 +19,12 @@ Open Mercato już ma, przede wszystkim na **WMS**.
 | `salesorders` | `sales_orders` + `sales_order_lines` (komenda `sales.orders.create`) | cena za kilogram, odbiorca, wartość netto i brutto liczona przez silnik podatkowy |
 | — (nie istniało) | `sales_invoices` (komenda `sales.invoices.create`) | faktura z numerem nadanym przez platformę |
 | `stockmoves.orderno` | metadane ruchu WMS → `salesOrderId` | z pozycji magazynowej wchodzi się na dokument sprzedaży |
+| `debtortrans` (wpłaty) | `sales_payments` + alokacje na fakturach | należności, wiek zaległości — pytanie „ile nam wiszą" ma odpowiedź |
+| `stockmoves` `PZ` (dostawca) | `wms_inventory_lots` (partia) | wiadomo, **czyj** odpad leży w którym boksie |
+| — (nie istniało) | `sales_shipments` jako karta przekazania | masa, kod odpadu, proces odzysku, numery rejestrowe obu stron |
+| zamówienia otwarte | `wms_inventory_reservations` | magazyn nie obieca dwa razy tego samego boksu |
+| `debtorsmaster.taxref` / `.bdonumber` | opis firmy w CRM / karta przekazania | NIP na fakturę, numer rejestrowy na kartę |
+| `stockmaster.recoverycode` | metadane frakcji → karta przekazania | kod procesu odzysku (R1, R3, R4, R5) |
 
 ## Dwa kanały źródłowe
 
@@ -98,11 +104,13 @@ kolejkę, wznawianie, historię przebiegów i pasek postępu — zamiast crona i
 
 ## Pełna ścieżka ERP
 
-Import przechodzi pięć zbiorów w kolejności, która nie jest kosmetyczna —
-zamówienie potrzebuje kontrahenta i frakcji, a ruch `WZ` potrzebuje zamówienia:
+Import przechodzi kolejno, a kolejność nie jest kosmetyczna — zamówienie
+potrzebuje kontrahenta i frakcji, karta przekazania potrzebuje zamówienia,
+wpłata potrzebuje faktury, a rezerwacja potrzebuje stanu magazynowego:
 
 ```
-topologia → frakcje → kontrahenci → zamówienia (+faktury) → księga ruchów
+topologia → frakcje → kontrahenci → zamówienia (+faktury)
+          → karty przekazania → wpłaty → partie → rezerwacje → księga ruchów
 ```
 
 Wszystko idzie komendami platformy (`commandBus`), a nie zapisem do encji.
@@ -127,13 +135,58 @@ Zweryfikowane na żywej instancji: 8 kontrahentów, 40 zamówień, 40 faktur
    ekranie operatora. Agregaty kwotowe liczymy SQL-em po identyfikatorze,
    a nazwy dociągamy `findWithDecryption`.
 
+## Co jeszcze robi ten moduł
+
+**Rozrachunki.** Wpłaty odbiorców idą komendą `sales.payments.create` z alokacją
+na konkretną fakturę. Bez alokacji powstałaby kwota wisząca w powietrzu, której
+saldo należności nie widzi. Pulpit pokazuje wystawione, wpłacone, zaległe,
+liczbę niezapłaconych dokumentów i wiek najstarszego.
+
+**Identyfikowalność.** Każde `PZ` zakłada partię (`wms.lots.create`) z nazwą
+dostawcy, kodem odpadu, masą i datą przyjęcia, a ruch przyjęcia ją wskazuje.
+Pytanie „czyj odpad leży w boksie trzecim" ma odpowiedź w magazynie.
+
+**Ewidencja przekazań.** Każde zrealizowane wydanie dostaje kartę przekazania
+jako wysyłkę na zamówieniu: masa w kilogramach, kod odpadu, kod procesu odzysku
+i numery rejestrowe obu stron. Karta powstaje **wyłącznie** dla wydania, które
+faktycznie zaszło — wystawienie jej dla odbioru zaplanowanego za tydzień byłoby
+poświadczeniem zdarzenia, do którego nie doszło.
+
+**Rezerwacje.** Zamówienie otwarte blokuje masę (`wms.inventory.reserve`), a
+rezerwacja wygasa w dniu odbioru. Gdy pokrycia brak, WMS odmawia — i to jest
+działająca ochrona, nie usterka; stary system przyjąłby takie zamówienie bez
+słowa, a brak wyszedłby przy załadunku.
+
+**Bilans masy.** Przyjęte minus wydane musi równać się temu, co leży.
+Sortowanie jest przesunięciem wewnętrznym i masy nie zmienia, więc do bilansu
+nie wchodzi. Na żywych danych bilans domyka się co do kilograma
+(437 131,25 − 236 353,44 = 200 777,81 kg, różnica 0), a sprawność sortowania
+wynosi 67,9%.
+
+## Czego ten moduł NIE robi
+
+Uczciwa lista, bo bez niej poprzednia sekcja brzmi jak obietnica:
+
+* **brak integracji z BDO.** Karta przekazania jest *odpowiednikiem* KPO, a nie
+  dokumentem z rejestru. Realna KPO powstaje w systemie prowadzonym przez
+  administrację i ma numer nadany przez ten rejestr;
+* **brak strony zakupowej.** Open Mercato nie ma modułu zakupów, więc przyjęcie
+  odpadu jest ruchem magazynowym z partią, a nie dokumentem zakupu. Opłata
+  bramowa nie jest fakturowana;
+* **import jest dopisujący.** Zmiana rekordu u źródła po imporcie nie jest
+  nadpisywana — jest natomiast **raportowana** jako rozjazd (wdrożone dla wpłat);
+* **kwalifikacja podatkowa uproszczona.** Wszystko liczy 23% VAT. Obrót
+  niektórymi odpadami bywa objęty innymi zasadami i moduł tego nie rozstrzyga;
+* **jednostka wysyłki.** Wysyłki Open Mercato zakładają sztuki, więc ilość
+  pozycji karty jest zaokrąglana w dół; masą wiążącą jest `weightValue`.
+
 ## Testy
 
 Moduł korzysta z narzędzi, które Open Mercato ma na pokładzie: Jest do testów
 jednostkowych i Playwright do integracyjnych (`__integration__/`, odkrywane
 przez `OM_INTEGRATION_MODULES`). Nic własnego nie dokładamy.
 
-Testy jednostkowe — 131 przypadków, 10 zestawów, bez bazy i bez sieci:
+Testy jednostkowe — 191 przypadków, 13 zestawów, bez bazy i bez sieci:
 
 ```bash
 cd apps/mercato
@@ -166,7 +219,7 @@ oraz to, że nazwy odbiorców są czytelne, a nie kryptogramem z bazy.
 Jeżeli mapowanie gdzieś się przekłamie — zgubiony znak, zgubiona para, pomylona
 jednostka — salda się rozjadą i ten test to pokaże.
 
-Strona legacy ma własny zestaw (`python3 tests/test_end_to_end.py`, 16 testów),
+Strona legacy ma własny zestaw (`python3 tests/test_end_to_end.py`, 19 testów),
 który pilnuje m.in. tego, że stan nigdy nie schodzi poniżej zera, że powierzchnia
 XML-RPC nie zawiera metod, których webERP nie ma, że NIP przechodzi kontrolę sumy
 kontrolnej i że każde `WZ` wskazuje istniejące zamówienie, a `PZ` i `SORT` — nie.
@@ -186,8 +239,8 @@ Zweryfikowane uruchomieniem na żywej instancji (Postgres + Redis + `apps/mercat
 Pulpit sprawdzony w przeglądarce (zalogowanie, render, zrzut ekranu): kafelki,
 wykres przepływu, zapełnienie boksów i księga ruchów zasilają się z żywej bazy.
 
-Testy: 131 jednostkowych i 16 po stronie legacy przechodzi, cross-walidacja
-(13 przypadków Playwright) przechodzi na żywym stacku bez ponowień.
+Testy: 191 jednostkowych i 19 po stronie legacy przechodzi, cross-walidacja
+(28 przypadków Playwright) przechodzi na żywym stacku bez ponowień.
 
 Nie zrobione jeszcze: uruchamianie importu z panelu Data Sync end‑to‑end
 (adapter jest zarejestrowany i waliduje połączenie, ale przebiegi odpalaliśmy

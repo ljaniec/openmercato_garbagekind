@@ -59,6 +59,12 @@ function defaultQueries(sql: string): unknown[] {
   if (sql.includes('group by o.customer_entity_id')) {
     return [{ customer_entity_id: 'ent-5', net: '120797.63', orders: '12' }]
   }
+  if (sql.includes('from sales_order_lines l')) {
+    return [{ sku: 'Frakcja 20 01 01', netto: '29069.34', masa: '67290.1' }]
+  }
+  if (sql.includes("case when type = 'receipt'") && !sql.includes('30 days')) {
+    return [{ przyjete: '437131.25', wysortowane: '296998.37', wydane: '236353.44' }]
+  }
   if (sql.includes('from wms_inventory_reservations r')) {
     return [{ total: '5', masa: '24500' }]
   }
@@ -236,6 +242,23 @@ describe('GET /api/sortownia/dashboard — dane', () => {
     const body = await readBody(await GET(makeRequest()))
     // Surowy odczyt `display_name` oddaje kryptogram i ląduje on na ekranie.
     expect(body.sales.topBuyers[0].nazwa).toBe('Stora Papier Recykling')
+  })
+
+  it('liczy bilans masy i sprawność sortowania', async () => {
+    const body = await readBody(await GET(makeRequest()))
+    expect(body.bilans).toMatchObject({
+      receivedKg: 437131.25,
+      issuedKg: 236353.44,
+      sortingRate: 67.9,
+    })
+    // 437 131,25 − 236 353,44 − (117 664,50 + 46 592,90) = 36 520,41.
+    // Stan na stanie liczymy z lokalizacji, więc różnica bierze się z mocka.
+    expect(typeof body.bilans.differenceKg).toBe('number')
+  })
+
+  it('cena za kilogram wynika z przychodu i masy, a nie z osobnego cennika', async () => {
+    const body = await readBody(await GET(makeRequest()))
+    expect(body.bilans.perFraction[0].pricePerKg).toBeCloseTo(29069.34 / 67290.1, 4)
   })
 
   it('oddaje masę zarezerwowaną pod zamówienia', async () => {

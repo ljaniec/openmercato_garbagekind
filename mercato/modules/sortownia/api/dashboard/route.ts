@@ -417,6 +417,42 @@ export async function GET(req: Request): Promise<Response> {
     [scope.organizationId, scope.tenantId],
   )
 
+  // Bilans masy i sprawność sortowania — liczby, którymi zakład rozlicza się
+  // ze sprawozdawczości i po których poznaje, czy sortownia w ogóle sortuje.
+  const [balance] = await em.getConnection().execute<Array<{
+    przyjete: string
+    wysortowane: string
+    wydane: string
+  }>>(
+    `select coalesce(sum(case when type = 'receipt' then quantity else 0 end), 0) as przyjete,
+            coalesce(sum(case when type = 'transfer' then quantity else 0 end), 0) as wysortowane,
+            coalesce(sum(case when type = 'adjust' then abs(quantity) else 0 end), 0) as wydane
+       from wms_inventory_movements
+      where organization_id = ?
+        and tenant_id = ?
+        and deleted_at is null`,
+    [scope.organizationId, scope.tenantId],
+  )
+
+  const perFractionRevenue = await em.getConnection().execute<Array<{
+    sku: string
+    netto: string
+    masa: string
+  }>>(
+    `select l.name as sku,
+            coalesce(sum(l.total_net_amount), 0) as netto,
+            coalesce(sum(l.quantity), 0) as masa
+       from sales_order_lines l
+       join sales_orders o on o.id = l.order_id
+      where o.organization_id = ?
+        and o.tenant_id = ?
+        and o.deleted_at is null
+        and o.external_reference is not null
+      group by l.name
+      order by sum(l.total_net_amount) desc`,
+    [scope.organizationId, scope.tenantId],
+  )
+
   const yardKg = locationRows
     .filter((row) => row.type === 'staging')
     .reduce((sum, row) => sum + (row.quantityKg ?? 0), 0)
@@ -445,6 +481,33 @@ export async function GET(req: Request): Promise<Response> {
         issuedKg: Number.parseFloat(row.issued),
       })),
       movements: movementRows,
+      bilans: (() => {
+        const przyjete = Number.parseFloat(balance?.przyjete ?? '0')
+        const wysortowane = Number.parseFloat(balance?.wysortowane ?? '0')
+        const wydane = Number.parseFloat(balance?.wydane ?? '0')
+        const naStanie = locationRows.reduce((sum, row) => sum + (row.quantityKg ?? 0), 0)
+        return {
+          receivedKg: przyjete,
+          sortedKg: wysortowane,
+          issuedKg: wydane,
+          onHandKg: naStanie,
+          // Bilans domyka się, gdy przyjęte minus wydane równa się temu, co leży.
+          // Sortowanie jest przesunięciem wewnętrznym i masy nie zmienia, więc
+          // do bilansu nie wchodzi. Różnica oznacza ubytek albo błąd ewidencji.
+          differenceKg: Number((przyjete - wydane - naStanie).toFixed(2)),
+          // Sprawność: ile z przyjętego udało się wysortować na frakcje.
+          sortingRate: przyjete > 0 ? Number(((wysortowane / przyjete) * 100).toFixed(1)) : null,
+          perFraction: perFractionRevenue.map((row) => ({
+            sku: row.sku,
+            netPln: Number.parseFloat(row.netto),
+            soldKg: Number.parseFloat(row.masa),
+            pricePerKg:
+              Number.parseFloat(row.masa) > 0
+                ? Number((Number.parseFloat(row.netto) / Number.parseFloat(row.masa)).toFixed(4))
+                : null,
+          })),
+        }
+      })(),
       rezerwacje: {
         count: Number.parseInt(reservations?.total ?? '0', 10),
         reservedKg: Number.parseFloat(reservations?.masa ?? '0'),

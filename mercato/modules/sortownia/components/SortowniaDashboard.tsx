@@ -68,6 +68,17 @@ type DashboardData = {
   traceability?: Traceability
   ewidencja?: Ewidencja
   rezerwacje?: { count: number; reservedKg: number }
+  bilans?: Bilans
+}
+
+type Bilans = {
+  receivedKg: number
+  sortedKg: number
+  issuedKg: number
+  onHandKg: number
+  differenceKg: number
+  sortingRate: number | null
+  perFraction: Array<{ sku: string; netPln: number; soldKg: number; pricePerKg: number | null }>
 }
 
 type Ewidencja = {
@@ -191,6 +202,7 @@ export default function SortowniaDashboard() {
   const trace = data?.traceability
   const ewidencja = data?.ewidencja
   const rezerwacje = data?.rezerwacje
+  const bilans = data?.bilans
   const bins = (data?.locations ?? []).filter((row) => row.capacityKg !== null)
   // Zapełnienie widać na liście lokalizacji, więc wykres pokazuje co innego:
   // ile każdej frakcji przeszło przez zakład w ostatnim miesiącu.
@@ -324,6 +336,90 @@ export default function SortowniaDashboard() {
                       <div className="text-xs text-muted-foreground">{buyer.orders} wydań</div>
                     </div>
                     <div className="text-sm tabular-nums">{formatPln(buyer.netPln)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      {bilans && bilans.receivedKg > 0 ? (
+        <section className="space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold">Bilans masy i sprawność sortowania</h2>
+            <p className="text-sm text-muted-foreground">
+              Przyjęte minus wydane musi równać się temu, co leży. Sortowanie jest
+              przesunięciem wewnętrznym i masy nie zmienia, więc do bilansu nie wchodzi.
+            </p>
+          </div>
+
+          <div
+            className={`rounded-lg border px-4 py-3 ${
+              Math.abs(bilans.differenceKg) > 1 ? 'border-amber-500/50 bg-amber-500/10' : ''
+            }`}
+          >
+            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm tabular-nums">
+              <span>{formatMg(bilans.receivedKg)} przyjęte</span>
+              <span className="text-muted-foreground">−</span>
+              <span>{formatMg(bilans.issuedKg)} wydane</span>
+              <span className="text-muted-foreground">=</span>
+              <span>{formatMg(bilans.onHandKg)} na stanie</span>
+              <span className="ml-auto font-medium">
+                {Math.abs(bilans.differenceKg) <= 1
+                  ? 'bilans domyka się'
+                  : `różnica ${formatMg(bilans.differenceKg)} — sprawdź ewidencję`}
+              </span>
+            </div>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <KpiCard
+              title="Sprawność sortowania"
+              value={bilans.sortingRate}
+              suffix="%"
+              loading={loading}
+              footer={
+                <span className="text-xs text-muted-foreground">
+                  {formatMg(bilans.sortedKg)} wysortowane z {formatMg(bilans.receivedKg)} przyjętych
+                </span>
+              }
+            />
+            <KpiCard
+              title="Średnia cena sprzedaży"
+              value={
+                bilans.perFraction.length
+                  ? Number(
+                      (
+                        bilans.perFraction.reduce((sum, row) => sum + row.netPln, 0) /
+                        Math.max(
+                          bilans.perFraction.reduce((sum, row) => sum + row.soldKg, 0),
+                          1,
+                        )
+                      ).toFixed(2),
+                    )
+                  : 0
+              }
+              suffix=" zł/kg"
+              loading={loading}
+              footer={<span className="text-xs text-muted-foreground">ważona masą wszystkich frakcji</span>}
+            />
+          </div>
+
+          {bilans.perFraction.length ? (
+            <div className="rounded-lg border">
+              <div className="border-b px-4 py-2 text-sm font-medium">Przychód per frakcja</div>
+              <div className="divide-y">
+                {bilans.perFraction.map((row) => (
+                  <div key={row.sku} className="flex items-center justify-between gap-4 px-4 py-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm">{row.sku}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {formatMg(row.soldKg)}
+                        {row.pricePerKg !== null ? ` · ${row.pricePerKg.toFixed(2)} zł/kg` : ''}
+                      </div>
+                    </div>
+                    <div className="text-sm tabular-nums">{formatPln(row.netPln)}</div>
                   </div>
                 ))}
               </div>
