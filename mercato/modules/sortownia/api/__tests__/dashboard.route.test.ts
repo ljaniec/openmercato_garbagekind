@@ -59,6 +59,9 @@ function defaultQueries(sql: string): unknown[] {
   if (sql.includes('group by o.customer_entity_id')) {
     return [{ customer_entity_id: 'ent-5', net: '120797.63', orders: '12' }]
   }
+  if (sql.includes('from sales_shipments s')) {
+    return [{ total: '40', masa: '164910', bez_procesu: '0', bez_bdo: '0' }]
+  }
   if (sql.includes('from wms_inventory_lots l')) {
     return [
       { dostawca: 'Gmina Wieliszew', lots: '31', masa: '142300' },
@@ -230,6 +233,11 @@ describe('GET /api/sortownia/dashboard — dane', () => {
     const body = await readBody(await GET(makeRequest()))
     // Surowy odczyt `display_name` oddaje kryptogram i ląduje on na ekranie.
     expect(body.sales.topBuyers[0].nazwa).toBe('Stora Papier Recykling')
+  })
+
+  it('oddaje ewidencję przekazań odpadu', async () => {
+    const body = await readBody(await GET(makeRequest()))
+    expect(body.ewidencja).toEqual({ cards: 40, massKg: 164910, withoutProcess: 0, withoutBdo: 0 })
   })
 
   it('oddaje pochodzenie odpadu z partii magazynowych', async () => {

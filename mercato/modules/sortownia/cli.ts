@@ -26,6 +26,7 @@ import { ensureFractions, loadFractionIndex } from './lib/fractions'
 import { applySalesOrders } from './lib/salesOrders'
 import { applyPayments } from './lib/payments'
 import { ensureLots } from './lib/lots'
+import { applyTransferCards } from './lib/transferCards'
 import { applyMovementBatch, type MovementContext } from './lib/movements'
 import { ensureTopology, loadLocationIndex } from './lib/topology'
 
@@ -161,7 +162,36 @@ const importCommand: ModuleCli = {
       console.log(`  zamówienia: pominięto (brak pliku albo kontrahentów)`)
     }
 
-    // 5. Wpłaty odbiorców — rozliczane na fakturach.
+    // 5. Karty przekazania odpadu — wysyłki na zamówieniach.
+    if (salesOrderIndex.size > 0 && (await fileExists(ordersPath))) {
+      const orderRows = await readOrders(ordersPath)
+      const bdoByDebtor = new Map<string, string>()
+      if (await fileExists(customersPath)) {
+        for (const row of await readCustomers(customersPath)) bdoByDebtor.set(row.debtorno, row.bdo)
+      }
+      const recoveryByStock = new Map<string, string>()
+      for (const row of await readFractions(fractionsPath)) recoveryByStock.set(row.stockid, row.kodProcesu)
+
+      const result = await applyTransferCards(
+        {
+          em,
+          commandBus,
+          commandContext,
+          scope,
+          orders: salesOrderIndex,
+          bdoByDebtor,
+          recoveryByStock,
+          ownBdo: process.env.SORTOWNIA_BDO ?? '000000001',
+        },
+        orderRows,
+      )
+      const created = result.outcomes.filter((o) => o.action === 'create').length
+      const failedCards = result.outcomes.filter((o) => o.action === 'failed')
+      console.log(`  karty przekazania: ${orderRows.length} wydań (nowych kart ${created})`)
+      for (const outcome of failedCards.slice(0, 5)) console.log(`    ! KPO/${outcome.orderno}: ${outcome.error}`)
+    }
+
+    // 6. Wpłaty odbiorców — rozliczane na fakturach.
     const paymentsPath = paymentsFile()
     if ((await fileExists(paymentsPath)) && salesOrderIndex.size > 0) {
       const rows = await readPayments(paymentsPath)
@@ -177,7 +207,7 @@ const importCommand: ModuleCli = {
       console.log('  wpłaty: pominięto (brak pliku albo zamówień)')
     }
 
-    // 6. Księga ruchów — kanał plikowy, zapis przez komendy WMS.
+    // 7. Księga ruchów — kanał plikowy, zapis przez komendy WMS.
     const movementsPath = movementsFile()
     if (!(await fileExists(movementsPath))) throw new Error(`Brak księgi ruchów: ${movementsPath}`)
 

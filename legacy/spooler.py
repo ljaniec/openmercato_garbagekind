@@ -58,7 +58,7 @@ def export_catalogs(db_path: pathlib.Path, wsad_dir: pathlib.Path) -> dict:
         customers = conn.execute(
             "SELECT debtorno, debtortype FROM debtorsmaster ORDER BY debtorno").fetchall()
         stocks = conn.execute(
-            "SELECT stockid, description, categoryid, units, actualcost, decimalplaces "
+            "SELECT stockid, description, categoryid, units, actualcost, decimalplaces, recoverycode "
             "FROM stockmaster ORDER BY stockid").fetchall()
         # Zamowienia ida tak samo jak kontrahenci: same klucze, szczegoly przez
         # xmlrpc_GetSalesOrderHeader - metode, ktora w webERP naprawde istnieje.
@@ -78,9 +78,11 @@ def export_catalogs(db_path: pathlib.Path, wsad_dir: pathlib.Path) -> dict:
 
     with (wsad_dir / STOCK_FILE).open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["stockid", "description", "categoryid", "units", "actualcost", "decimalplaces"])
+        writer.writerow(["stockid", "description", "categoryid", "units", "actualcost",
+                         "decimalplaces", "recoverycode"])
         writer.writerows([[row[k] for k in
-                           ("stockid", "description", "categoryid", "units", "actualcost", "decimalplaces")]
+                           ("stockid", "description", "categoryid", "units", "actualcost",
+                            "decimalplaces", "recoverycode")]
                           for row in stocks])
 
     with (wsad_dir / ORDERS_FILE).open("w", newline="", encoding="utf-8") as handle:
@@ -127,6 +129,10 @@ def export_moves(db_path: pathlib.Path, wsad_dir: pathlib.Path, as_of: dt.dateti
 def main() -> None:
     parser = argparse.ArgumentParser(description="Zrzut plikowy systemu legacy (katalogi + ksiega ruchow)")
     parser.add_argument("--db", default=str(HERE / "sortownia.db"))
+    parser.add_argument("--ujawnij-wszystko", action="store_true",
+                        help="Zrzuc cala ksiege od razu, razem z ruchami zapasowymi. "
+                             "Po przebudowie bazy zegar ujawniania rusza od nowa, wiec zrzut "
+                             "bywa wstecz wobec tego, co juz wjechalo do Open Mercato.")
     parser.add_argument("--wsad", default=str(HERE / "wsad"))
     parser.add_argument("--interval", type=float, default=5.0, help="co ile sekund odswiezac zrzut")
     parser.add_argument("--once", action="store_true", help="jeden zrzut zamiast petli")
@@ -138,7 +144,11 @@ def main() -> None:
         raise SystemExit(f"Brak bazy {db_path}. Uruchom najpierw: python3 legacy/generate.py --db {db_path}")
 
     counts = export_catalogs(db_path, wsad_dir)
-    moves = export_moves(db_path, wsad_dir)
+    # Po przebudowie bazy zegar ujawniania rezerwy rusza od zera, wiec zrzut
+    # potrafi byc wstecz wobec tego, co juz wjechalo do Open Mercato. Ta flaga
+    # ujawnia cala ksiege naraz i wyrownuje obie strony.
+    horizon = dt.datetime.now() + dt.timedelta(days=365) if args.ujawnij_wszystko else None
+    moves = export_moves(db_path, wsad_dir, as_of=horizon)
     print(f"Zrzut w {wsad_dir}: kontrahenci {counts['kontrahenci']}, "
           f"frakcje {counts['frakcje']}, zamowienia {counts['zamowienia']}, "
           f"zaplaty {counts['zaplaty']}, ruchy {moves}")

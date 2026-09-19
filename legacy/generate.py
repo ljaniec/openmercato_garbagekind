@@ -46,25 +46,30 @@ def nip(base9: str) -> str:
 
 
 DEBTORS = [
-    # debtorno, name, address1, address2 (miasto), debtortype, currcode, clientsince, creditlimit, taxref
-    ("D001", "Gmina Wieliszew",              "ul. Modlinska 12",     "Wieliszew",  "DOS", "PLN", "2011-03-14", 0.0, nip("536178001")),
-    ("D002", "Spoldzielnia Mieszkaniowa Zorza", "ul. Sloneczna 4",   "Legionowo",  "DOS", "PLN", "2013-09-01", 0.0, nip("536241002")),
-    ("D003", "PPHU Transbud",                "ul. Przemyslowa 88",   "Nowy Dwor",  "DOS", "PLN", "2016-06-20", 0.0, nip("536310003")),
-    ("D004", "Zaklad Komunalny Serock",      "ul. Nadrzeczna 3",     "Serock",     "DOS", "PLN", "2009-01-08", 0.0, nip("536422004")),
-    ("D005", "Stora Papier Recykling",       "ul. Fabryczna 21",     "Ostroleka",  "ODB", "PLN", "2012-04-02", 250000.0, nip("774113005")),
-    ("D006", "PlastMet Sp. z o.o.",          "ul. Tworzywowa 7",     "Plock",      "ODB", "PLN", "2014-11-17", 180000.0, nip("774250006")),
-    ("D007", "Huta Szkla Jaroslaw",          "ul. Hutnicza 1",       "Jaroslaw",   "ODB", "EUR", "2018-02-05", 120000.0, nip("795104007")),
-    ("D008", "Cementownia Odolanow RDF",     "ul. Wapienna 40",      "Odolanow",   "ODB", "PLN", "2019-08-22", 300000.0, nip("622187008")),
+    # debtorno, name, address1, address2 (miasto), debtortype, currcode, clientsince, creditlimit, taxref, bdonumber
+    ("D001", "Gmina Wieliszew",              "ul. Modlinska 12",     "Wieliszew",  "DOS", "PLN", "2011-03-14", 0.0, nip("536178001"), "000012456"),
+    ("D002", "Spoldzielnia Mieszkaniowa Zorza", "ul. Sloneczna 4",   "Legionowo",  "DOS", "PLN", "2013-09-01", 0.0, nip("536241002"), "000023781"),
+    ("D003", "PPHU Transbud",                "ul. Przemyslowa 88",   "Nowy Dwor",  "DOS", "PLN", "2016-06-20", 0.0, nip("536310003"), "000031094"),
+    ("D004", "Zaklad Komunalny Serock",      "ul. Nadrzeczna 3",     "Serock",     "DOS", "PLN", "2009-01-08", 0.0, nip("536422004"), "000047215"),
+    ("D005", "Stora Papier Recykling",       "ul. Fabryczna 21",     "Ostroleka",  "ODB", "PLN", "2012-04-02", 250000.0, nip("774113005"), "000118340"),
+    ("D006", "PlastMet Sp. z o.o.",          "ul. Tworzywowa 7",     "Plock",      "ODB", "PLN", "2014-11-17", 180000.0, nip("774250006"), "000126702"),
+    ("D007", "Huta Szkla Jaroslaw",          "ul. Hutnicza 1",       "Jaroslaw",   "ODB", "EUR", "2018-02-05", 120000.0, nip("795104007"), "000139518"),
+    ("D008", "Cementownia Odolanow RDF",     "ul. Wapienna 40",      "Odolanow",   "ODB", "PLN", "2019-08-22", 300000.0, nip("622187008"), "000145063"),
 ]
 
 STOCKS = [
-    # stockid, description, categoryid, units, actualcost (PLN/kg), decimalplaces
-    ("20 01 01", "Papier i tektura",            "SUR", "kg", 0.32, 2),
-    ("15 01 02", "Tworzywa sztuczne PET",       "SUR", "kg", 1.15, 2),
-    ("20 01 02", "Szklo opakowaniowe",          "SUR", "kg", 0.08, 2),
-    ("20 01 40", "Metale (zlom mieszany)",      "SUR", "kg", 1.85, 2),
-    ("19 12 10", "RDF - paliwo alternatywne",   "PAL", "kg", 0.05, 2),
-    ("20 02 01", "Odpady ulegajace biodegradacji", "BIO", "kg", 0.02, 2),
+    # stockid, description, categoryid, units, actualcost (PLN/kg), decimalplaces, recoverycode
+    #
+    # Kody procesu odzysku wg zalacznika do ustawy o odpadach (transpozycja
+    # zalacznika II dyrektywy 2008/98/WE): R1 - wykorzystanie jako paliwo,
+    # R3 - recykling substancji organicznych, R4 - recykling metali,
+    # R5 - recykling innych materialow nieorganicznych.
+    ("20 01 01", "Papier i tektura",            "SUR", "kg", 0.32, 2, "R3"),
+    ("15 01 02", "Tworzywa sztuczne PET",       "SUR", "kg", 1.15, 2, "R3"),
+    ("20 01 02", "Szklo opakowaniowe",          "SUR", "kg", 0.08, 2, "R5"),
+    ("20 01 40", "Metale (zlom mieszany)",      "SUR", "kg", 1.85, 2, "R4"),
+    ("19 12 10", "RDF - paliwo alternatywne",   "PAL", "kg", 0.05, 2, "R1"),
+    ("20 02 01", "Odpady ulegajace biodegradacji", "BIO", "kg", 0.02, 2, "R3"),
 ]
 
 LOCATIONS = [
@@ -266,8 +271,8 @@ def build(db_path: pathlib.Path, base_moves_count: int, reserve_moves_count: int
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA.read_text(encoding="utf-8"))
 
-    conn.executemany("INSERT INTO debtorsmaster VALUES (?,?,?,?,?,?,?,?,?)", DEBTORS)
-    conn.executemany("INSERT INTO stockmaster VALUES (?,?,?,?,?,?)", STOCKS)
+    conn.executemany("INSERT INTO debtorsmaster VALUES (?,?,?,?,?,?,?,?,?,?)", DEBTORS)
+    conn.executemany("INSERT INTO stockmaster VALUES (?,?,?,?,?,?,?)", STOCKS)
     conn.executemany("INSERT INTO locations VALUES (?,?,?)", LOCATIONS)
 
     ledger = Ledger()

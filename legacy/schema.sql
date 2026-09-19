@@ -20,7 +20,8 @@ CREATE TABLE debtorsmaster (
     currcode     TEXT NOT NULL,
     clientsince  TEXT NOT NULL,   -- YYYY-MM-DD
     creditlimit  REAL NOT NULL,
-    taxref       TEXT NOT NULL DEFAULT ''  -- NIP; w webERP tez nazywa sie taxref
+    taxref       TEXT NOT NULL DEFAULT '',  -- NIP; w webERP tez nazywa sie taxref
+    bdonumber    TEXT NOT NULL DEFAULT ''   -- numer rejestrowy BDO
 );
 
 -- Frakcje odpadow jako pozycje magazynowe.
@@ -30,7 +31,8 @@ CREATE TABLE stockmaster (
     categoryid    TEXT NOT NULL,
     units         TEXT NOT NULL,  -- legacy trzyma masy w kilogramach
     actualcost    REAL NOT NULL,
-    decimalplaces INTEGER NOT NULL
+    decimalplaces INTEGER NOT NULL,
+    recoverycode  TEXT NOT NULL DEFAULT ''  -- kod procesu odzysku (R1, R3, R4, R5)
 );
 
 -- Boksy i magazyny.

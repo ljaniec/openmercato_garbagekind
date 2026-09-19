@@ -381,6 +381,26 @@ export async function GET(req: Request): Promise<Response> {
     [scope.organizationId, scope.tenantId],
   )
 
+  // Ewidencja przekazań: ile kart wystawiono, na jaką masę i czy któraś
+  // nie ma kompletu danych wymaganych przy przekazaniu odpadu.
+  const [cards] = await em.getConnection().execute<Array<{
+    total: string
+    masa: string
+    bez_procesu: string
+    bez_bdo: string
+  }>>(
+    `select count(*) as total,
+            coalesce(sum(s.weight_value), 0) as masa,
+            count(*) filter (where s.metadata->>'kodProcesu' is null) as bez_procesu,
+            count(*) filter (where s.metadata->>'bdoPrzejmujacego' is null) as bez_bdo
+       from sales_shipments s
+      where s.organization_id = ?
+        and s.tenant_id = ?
+        and s.deleted_at is null
+        and s.shipment_number like 'KPO/%'`,
+    [scope.organizationId, scope.tenantId],
+  )
+
   const yardKg = locationRows
     .filter((row) => row.type === 'staging')
     .reduce((sum, row) => sum + (row.quantityKg ?? 0), 0)
@@ -409,6 +429,12 @@ export async function GET(req: Request): Promise<Response> {
         issuedKg: Number.parseFloat(row.issued),
       })),
       movements: movementRows,
+      ewidencja: {
+        cards: Number.parseInt(cards?.total ?? '0', 10),
+        massKg: Number.parseFloat(cards?.masa ?? '0'),
+        withoutProcess: Number.parseInt(cards?.bez_procesu ?? '0', 10),
+        withoutBdo: Number.parseInt(cards?.bez_bdo ?? '0', 10),
+      },
       traceability: {
         lots: suppliers.reduce((sum, row) => sum + Number.parseInt(row.lots, 10), 0),
         suppliers: suppliers.map((row) => ({

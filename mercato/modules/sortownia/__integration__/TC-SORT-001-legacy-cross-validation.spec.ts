@@ -51,6 +51,12 @@ type DashboardPayload = {
   locations: Array<{ code: string; type: string; quantityKg: number | null; capacityKg: number | null; utilisation: number | null }>
   fractions: Array<{ sku: string; quantityKg: number }>
   movements: Array<{ type: string; legacyMoveNo: number | string | null }>
+  ewidencja?: {
+    cards: number
+    massKg: number
+    withoutProcess: number
+    withoutBdo: number
+  }
   traceability?: {
     lots: number
     suppliers: Array<{ dostawca: string; lots: number; receivedKg: number }>
@@ -395,6 +401,25 @@ test.describe('TC-SORT-001 — zgodność Open Mercato z księgą systemu legacy
       expect.soft(row.dostawca, 'dostawca pokazany kodem legacy').not.toMatch(/^D\d{3}$/)
       expect.soft(row.dostawca, 'dostawca bez nazwy').not.toBe('nieznany')
     }
+  })
+
+  test('każde wydanie ma kartę przekazania — przekazanie bez ewidencji jest bezprawne', async ({ request }) => {
+    const orders = await readLegacyOrders()
+    const dashboard = await loadDashboard(request)
+    expect(dashboard.ewidencja?.cards).toBe(orders.length)
+  })
+
+  test('masa na kartach zgadza się z masą zamówionych wydań', async ({ request }) => {
+    const orders = await readLegacyOrders()
+    const expectedKg = orders.reduce((sum, row) => sum + row.iloscKg, 0)
+    const dashboard = await loadDashboard(request)
+    expect(dashboard.ewidencja?.massKg ?? 0).toBeCloseTo(expectedKg, 1)
+  })
+
+  test('żadna karta nie jest niekompletna — brak kodu procesu albo numeru BDO unieważnia ewidencję', async ({ request }) => {
+    const dashboard = await loadDashboard(request)
+    expect.soft(dashboard.ewidencja?.withoutProcess ?? 0, 'karty bez kodu procesu odzysku').toBe(0)
+    expect.soft(dashboard.ewidencja?.withoutBdo ?? 0, 'karty bez numeru rejestrowego odbiorcy').toBe(0)
   })
 
   test('konwersja kilogramów na megagramy jest spójna w całej księdze legacy', async () => {

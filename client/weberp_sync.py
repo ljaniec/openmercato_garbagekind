@@ -209,15 +209,17 @@ def sync(url: str, out_dir: pathlib.Path, user: str, password: str, company: str
             continue
         customer_rows.append([record["debtorno"], record["name"], record["debtortype"],
                               record["address2"], record["currcode"], record["clientsince"],
-                              record.get("taxref", "")])
+                              record.get("taxref", ""), record.get("bdonumber", "")])
     write_csv(out_dir / "kontrahenci.csv",
-              ["debtorno", "name", "typ", "miasto", "waluta", "klient_od", "nip"], customer_rows)
+              ["debtorno", "name", "typ", "miasto", "waluta", "klient_od", "nip", "bdo"],
+              customer_rows)
 
     # --- frakcje: w calosci ze zrzutu (webERP nie wystawia katalogu) ---------
     stocks = read_table(find_drop(wsad_dir, "frakcje"))
     write_csv(out_dir / "frakcje.csv",
-              ["stockid", "nazwa", "kategoria", "jednostka", "koszt"],
-              [[s["stockid"], s["description"], s["categoryid"], s["units"], s["actualcost"]]
+              ["stockid", "nazwa", "kategoria", "jednostka", "koszt", "kod_procesu"],
+              [[s["stockid"], s["description"], s["categoryid"], s["units"], s["actualcost"],
+                s.get("recoverycode", "")]
                for s in stocks])
 
     # --- lokalizacje: lista + szczegoly, obie metody sa w webERP -------------

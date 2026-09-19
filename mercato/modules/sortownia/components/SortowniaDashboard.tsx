@@ -66,6 +66,14 @@ type DashboardData = {
   movements: MovementRow[]
   sales?: SalesSummary
   traceability?: Traceability
+  ewidencja?: Ewidencja
+}
+
+type Ewidencja = {
+  cards: number
+  massKg: number
+  withoutProcess: number
+  withoutBdo: number
 }
 
 type Traceability = {
@@ -180,6 +188,7 @@ export default function SortowniaDashboard() {
   const totals = data?.totals
   const sales = data?.sales
   const trace = data?.traceability
+  const ewidencja = data?.ewidencja
   const bins = (data?.locations ?? []).filter((row) => row.capacityKg !== null)
   // Zapełnienie widać na liście lokalizacji, więc wykres pokazuje co innego:
   // ile każdej frakcji przeszło przez zakład w ostatnim miesiącu.
@@ -312,6 +321,46 @@ export default function SortowniaDashboard() {
               </div>
             </div>
           ) : null}
+        </section>
+      ) : null}
+
+      {ewidencja && ewidencja.cards > 0 ? (
+        <section className="space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold">Ewidencja przekazań odpadu</h2>
+            <p className="text-sm text-muted-foreground">
+              Każde wydanie ma kartę przekazania z masą, kodem odpadu, procesem odzysku
+              i numerami rejestrowymi obu stron. To odpowiednik karty przekazania odpadu —
+              nie dokument z systemu BDO, bo integracji z BDO tu nie ma.
+            </p>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <KpiCard
+              title="Karty przekazania"
+              value={ewidencja.cards}
+              loading={loading}
+              footer={<span className="text-xs text-muted-foreground">wystawione z wydań WZ</span>}
+            />
+            <KpiCard
+              title="Masa przekazana"
+              value={toMg(ewidencja.massKg)}
+              suffix=" Mg"
+              loading={loading}
+              footer={<span className="text-xs text-muted-foreground">suma z kart przekazania</span>}
+            />
+            <KpiCard
+              title="Karty niekompletne"
+              value={ewidencja.withoutProcess + ewidencja.withoutBdo}
+              loading={loading}
+              footer={
+                <span className="text-xs text-muted-foreground">
+                  {ewidencja.withoutProcess + ewidencja.withoutBdo === 0
+                    ? 'komplet danych na każdej karcie'
+                    : `bez procesu ${ewidencja.withoutProcess}, bez numeru BDO ${ewidencja.withoutBdo}`}
+                </span>
+              }
+            />
+          </div>
         </section>
       ) : null}
 

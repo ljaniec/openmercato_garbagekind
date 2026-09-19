@@ -68,6 +68,7 @@ const payload = {
       { nazwa: 'PlastMet Sp. z o.o.', netPln: 15002.25, orders: 9 },
     ],
   },
+  ewidencja: { cards: 40, massKg: 164910, withoutProcess: 0, withoutBdo: 0 },
   traceability: {
     lots: 95,
     suppliers: [
@@ -242,6 +243,26 @@ describe('SortowniaDashboard', () => {
     render(<SortowniaDashboard />)
     await screen.findByText('Na placu przyjęć')
     expect(screen.queryByText('Pochodzenie odpadu')).not.toBeInTheDocument()
+  })
+
+  it('pokazuje ewidencję przekazań odpadu', async () => {
+    render(<SortowniaDashboard />)
+    expect(await screen.findByText('Ewidencja przekazań odpadu')).toBeInTheDocument()
+    expect(screen.getByText('Karty przekazania')).toBeInTheDocument()
+    expect(screen.getByText('komplet danych na każdej karcie')).toBeInTheDocument()
+  })
+
+  it('wytyka niekompletne karty zamiast je przemilczeć', async () => {
+    respondWith({ ...payload, ewidencja: { cards: 40, massKg: 164910, withoutProcess: 2, withoutBdo: 3 } })
+    render(<SortowniaDashboard />)
+    await screen.findByText('Ewidencja przekazań odpadu')
+    expect(screen.getByText('bez procesu 2, bez numeru BDO 3')).toBeInTheDocument()
+  })
+
+  it('nie udaje, że to dokument z BDO', async () => {
+    render(<SortowniaDashboard />)
+    await screen.findByText('Ewidencja przekazań odpadu')
+    expect(screen.getByText(/nie dokument z systemu BDO/)).toBeInTheDocument()
   })
 
   it('pokazuje przepływ frakcji jako wykres', async () => {

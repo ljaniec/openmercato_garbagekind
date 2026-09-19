@@ -109,7 +109,14 @@ export async function ensureFractions(
         trackSerial: false,
         trackExpiration: false,
         reorderPoint: reorderPoint === undefined ? null : String(reorderPoint),
-        metadata: { legacyStockid: sku, kategoria: fraction.kategoria, jednostkaLegacy: fraction.jednostka },
+        metadata: {
+          legacyStockid: sku,
+          kategoria: fraction.kategoria,
+          jednostkaLegacy: fraction.jednostka,
+          // Kod procesu odzysku trafia na kartę przekazania odpadu, więc musi
+          // być przy frakcji, a nie wpisywany ręcznie przy każdym wydaniu.
+          kodProcesu: fraction.kodProcesu || null,
+        },
       } as unknown as ProductInventoryProfile)
       em.persist(profile)
       created += 1

@@ -34,6 +34,8 @@ export type LegacyCustomerRow = {
   waluta: string
   klientOd: string
   nip: string
+  /** Numer rejestrowy BDO — na karcie przekazania musi być po obu stronach. */
+  bdo: string
 }
 
 export type LegacyOrderRow = {
@@ -61,6 +63,8 @@ export type LegacyFractionRow = {
   kategoria: string
   jednostka: string
   koszt: number
+  /** Kod procesu odzysku (R1, R3, R4, R5) — czym ta frakcja się staje. */
+  kodProcesu: string
 }
 
 /** Rozdziela wiersz CSV z obsługą cudzysłowów — tyle, ile wymaga eksport legacy. */
@@ -195,6 +199,7 @@ export async function readCustomers(filePath: string): Promise<LegacyCustomerRow
       waluta: (row.waluta ?? 'PLN').toUpperCase(),
       klientOd: row.klient_od ?? '',
       nip: row.nip ?? '',
+      bdo: row.bdo ?? '',
     })
   }
   return out
@@ -252,6 +257,7 @@ export async function readFractions(filePath: string): Promise<LegacyFractionRow
       kategoria: row.kategoria ?? '',
       jednostka: row.jednostka ?? 'kg',
       koszt: toNumber(row.koszt),
+      kodProcesu: (row.kod_procesu ?? '').toUpperCase(),
     })
   }
   return out
