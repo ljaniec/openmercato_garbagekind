@@ -596,3 +596,133 @@ Dowód 4A — próg przekroczony | pick-bin-ur10e v2 | rolled_back
   zamiast statystyk i każdy werdykt wychodził `hold`. Cztery testy były
   czerwone z powodu atrapy, nie implementacji — i naprawa poszła w atrapę,
   bez rozluźniania asercji.
+
+---
+
+**Faza 5 — moduł `safety`** (w `mercato/modules/safety`): uzasadnienie
+bezpieczeństwa, ewaluacja i incydenty. Cztery tabele, siedem komend, endpoint
+panelu, strona backendu, trzy komendy CLI, 43 testy jednostkowe.
+
+To jest warstwa, która odpowiada regulatorowi: rozporządzenie (UE) 2023/1230
+(stosowane od 20 stycznia 2027), AI Act art. 6 ust. 1, ISO 10218-1/-2:2025,
+ISO/TS 15066:2016.
+
+**Kierunek zależności został tu odwrócony względem intuicji.** `deployment`
+zyskał zależność od `safety`, a nie odwrotnie: dopuszczenie jest warunkiem
+wstępnym przypisania stanu pożądanego, a nie jego skutkiem ubocznym.
+
+| Decyzja | Odrzucona alternatywa | Dlaczego |
+| --- | --- | --- |
+| `deployment` woła `safety.clearance.check` przed zapisem | subskrybent zdarzeń odwołujący przypisanie po fakcie | wariant zdarzeniowy wygląda czyściej i zostawia okno, w którym robot pracuje niedopuszczoną polityką — długość okna zależy od opóźnienia kolejki |
+| `cell_class` jako tekst | klucz obcy do `fleet_cells` | dopuszczenie dotyczy **klasy** celi; klucz obcy kazałby pisać osobne uzasadnienie dla każdej nowej celi o niezmienionej konfiguracji, a taki koszt kończy się dopuszczeniami hurtem bez czytania |
+| Kolumna `declared_as_safety_function` istnieje po to, żeby była fałszem | brak kolumny i milczące założenie | założenie nie zostawia śladu; kolumna zmusza do jawnej decyzji, a zatwierdzenie jej odmawia z przywołaniem Annex I części A |
+| Odmowa na poziomie **zatwierdzenia**, nie dopiero dopuszczenia | odmowa tylko przy wdrożeniu | zatwierdzony dokument z taką deklaracją szkodzi bardziej niż jego brak: jest dowodem, że wiedziano i mimo to zatwierdzono |
+| Deklaracja **wycofana** przestaje blokować | blokada trwała | reguła bez legalnej drogi odwrotu uczy obchodzenia systemu i przestaje chronić cokolwiek; ślad po wycofaniu zostaje w tabeli z powodem |
+| `safety_layer` obowiązkowy przy zatwierdzeniu | pole opcjonalne | uzasadnienie, które nie mówi, **co** zatrzyma maszynę, gdy polityka zawiedzie, jest opisem nadziei |
+| `valid_until` obowiązkowy przy zatwierdzeniu | dopuszczenie bezterminowe | ta sama zasada, co przy dacie ważności kalibracji: dopuszczenie bez terminu to dopuszczenie, o którym nikt nigdy nie przypomni |
+| Dopuszczenie bierze **najnowszy** przebieg zestawu | „czy kiedykolwiek przeszedł" | zestaw powtórzony po zmianie w celi i niezaliczony unieważnia poprzedni sukces; szukanie historycznego zaliczenia dawałoby zgody na podstawie wyniku sprzed roku |
+| Przebieg na innym odcisku kontraktu embodimentu nie liczy się | porównanie tylko po wersji polityki | najczęstsza droga do dopuszczenia „na podstawie testów", których nikt nie powtórzył po wymianie chwytaka |
+| `required_for` to lista klas ryzyka | jedna klasa per zestaw | limity siły z ISO/TS 15066 mają sens tam, gdzie kontakt jest możliwy; wymaganie ich za płotem byłoby rytuałem, a rytuały uczą omijania wymagań |
+| Klasyfikacja incydentu dwuwymiarowa | jedna skala ciężkości | skala skleiłaby „czy ktoś ucierpiał" z „czy zawiodła warstwa bezpieczeństwa" i zgubiła najważniejszy przypadek: zdarzenie bez skutków, w którym ostatnia linia zadziałała |
+| Incydent wstrzymujący wycofuje uzasadnienie dla klasy celi | zatrzymanie pojedynczego wdrożenia | skoro dopuszczenie dotyczy klasy, to zdarzenie podważające je podważa je dla wszystkich cel tej klasy — i każde kolejne przypisanie odbija się samo |
+| `safety.clearance.check` jako komenda odczytu | zwykłe zapytanie | pytanie „czy wolno wdrożyć tę wersję w tej klasie celi" trzeba umieć odtworzyć po trzech latach razem z datą i aktorem |
+| Uzasadnienie wycofane wraca do `draft` przy ponownym redagowaniu | drugi wiersz dla tej samej pary | dwa uzasadnienia dla tej samej pary to dwa dokumenty, z których jeden jest nieaktualny, a przy odczycie nie wiadomo który |
+| `employee` bez `safety.approve` | jedno uprawnienie | zatwierdzenie jest podpisem pod dokumentem regulacyjnym, nie czynnością operacyjną; zgłaszanie incydentów odwrotnie — nadane szeroko, bo incydent wymagający proszenia o dostęp bywa niezgłaszany |
+
+Uruchomienie:
+
+```bash
+./mercato/install.sh safety && ./mercato/install.sh deployment
+cd /sciezka/do/open-mercato/apps/mercato
+yarn generate && yarn mercato db migrate
+yarn mercato auth sync-role-acls
+yarn mercato safety seed     # katalog zestawów ewaluacyjnych
+yarn mercato safety prove    # dowód fazy
+yarn mercato safety status
+```
+
+Ekran: `/backend/safety`, uprawnienie `safety.view`.
+
+### Dowód fazy 5
+
+Warunek zaliczenia brzmiał: *wersja polityki bez kompletu przejść
+ewaluacyjnych nie daje się wdrożyć w celi klasy, dla której uzasadnienie nie
+zostało zatwierdzone.* Kluczowe jest, **skąd** przychodzi odmowa — z komendy
+przypisania stanu pożądanego, a nie z osobnego raportu:
+
+```
+DOWÓD FAZY 5 — dopuszczenie dotyczy klasy celi, nie celi
+
+   robot FR3-0001, klasa celi fenced-pick-place, ryzyko fenced
+   wersja insert-peg-fr3 v1
+   zestawy wymagane dla ryzyka fenced: grasp-release-integrity, reach-envelope
+
+1) brak uzasadnienia i brak przebiegów ewaluacyjnych
+   dopuszczenie: false; powody: brak zatwierdzonego uzasadnienia bezpieczeństwa
+     dla klasy celi fenced-pick-place | brak przebiegu zestawów wymaganych dla
+     klasy ryzyka fenced: reach-envelope, grasp-release-integrity
+   odbite: Wersja insert-peg-fr3 v1 nie jest dopuszczona do klasy celi fenced-pick-place: …
+
+2) komplet zaliczonych zestawów, uzasadnienie tylko w wersji roboczej
+   dopuszczenie: false; powody: uzasadnienie bezpieczeństwa dla klasy celi
+     fenced-pick-place jest w wersji roboczej i nie zostało zatwierdzone
+   odbite: Wersja insert-peg-fr3 v1 nie jest dopuszczona do klasy celi fenced-pick-place: …
+
+3) uzasadnienie zatwierdzone dla KLASY celi
+   dopuszczenie: true
+   WDROŻONE
+
+4) jeden zestaw przebiegł ponownie i nie przeszedł
+   dopuszczenie: false; powody: zestawy zakończone niepowodzeniem: grasp-release-integrity
+   (dopuszczenie bierze NAJNOWSZY przebieg, nie jakikolwiek zaliczony)
+   odbite: Wersja insert-peg-fr3 v1 nie jest dopuszczona do klasy celi fenced-pick-place: …
+
+5) próba zatwierdzenia uzasadnienia deklarującego politykę jako funkcję bezpieczeństwa
+   odbite: Uzasadnienie deklaruje uczoną politykę jako funkcję bezpieczeństwa.
+     Nie da się tego zatwierdzić: wpycha maszynę w Annex I część A rozporządzenia
+     2023/1230, czyli w ocenę przez jednostkę notyfikowaną, dla której nie istnieje
+     ustalona metoda wykazania zgodności. Bezpieczeństwo egzekwuje osobna warstwa
+     deterministyczna.
+   po wycofaniu sondy dopuszczenie dla fenced-pick-place: false
+     (powody: zestawy zakończone niepowodzeniem: grasp-release-integrity)
+```
+
+Punkt 2 jest najważniejszy, bo jest najgroźniejszy: komplet zaliczonych
+zestawów sprawia wrażenie, że wszystko jest gotowe. Punkt 4 pokazuje, że
+zaliczenie nie jest wieczne. Punkt 5 jest jedynym w całym projekcie
+miejscem, w którym platforma odmawia czegoś **bezwarunkowo**, niezależnie od
+kompletu testów.
+
+Ścieżka sieciowa, konto `employee` (`safety.view`, bez `safety.approve`):
+
+```
+GET /api/safety/clearance  →  200
+totals: {"versions": 3, "cellClasses": 2, "cleared": 0, "blocked": 6,
+         "declaredAsSafetyFunction": 0, "openIncidents": 0}
+  insert-peg-fr3 v1  fenced-pick-place  fenced  ZABLOKOWANA  zestawy zakończone
+                                                  niepowodzeniem: grasp-release-integrity
+  insert-peg-fr3 v1  public-handover    public  ZABLOKOWANA  brak zatwierdzonego uzasadnienia …
+  pick-bin-ur10e v1  fenced-pick-place  fenced  ZABLOKOWANA  brak zatwierdzonego uzasadnienia …
+  pick-bin-ur10e v1  public-handover    public  ZABLOKOWANA  brak zatwierdzonego uzasadnienia …
+  pick-bin-ur10e v2  fenced-pick-place  fenced  ZABLOKOWANA  brak zatwierdzonego uzasadnienia …
+  pick-bin-ur10e v2  public-handover    public  ZABLOKOWANA  brak zatwierdzonego uzasadnienia …
+```
+
+Macierz jest w całości czerwona i to jest poprawny obraz stanu instancji:
+wersje wdrożone w fazach 2–4 powstały, **zanim** brama bezpieczeństwa
+istniała. Faza 5 ich nie zdejmuje — przypisania już istniejące zostają —
+ale żadne nowe przypisanie tych wersji nie przejdzie. Zamiatanie tego przez
+wsteczne dopuszczanie byłoby dokładnie tym, czemu ta warstwa ma zapobiegać.
+
+#### Dwa błędy znalezione przy odtwarzaniu dowodu
+
+- **Trwała blokada po wycofanej deklaracji.** Reguła sprawdzała
+  `declaredAsSafetyFunction` bez patrzenia na status uzasadnienia, więc raz
+  postawiona deklaracja blokowała wersję **na zawsze i we wszystkich klasach
+  celi**, bez legalnej drogi wyjścia poza ręcznym DELETE w bazie. Naprawione:
+  liczą się wyłącznie uzasadnienia nie wycofane. Reguła bez drogi odwrotu uczy
+  obchodzenia systemu i przestaje chronić cokolwiek.
+- **Sonda dowodu zostawiała trwały stan.** Krok 5 zakładał uzasadnienie
+  z deklaracją i go nie sprzątał, przez co drugie uruchomienie dowodu
+  wywracało się na własnych śmieciach. Dowód wycofuje teraz sondę na koniec
+  (wycofanie, nie DELETE — ślad po próbie zostaje).

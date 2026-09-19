@@ -112,8 +112,17 @@ export function evaluateClearance(input: ClearanceInput): ClearanceVerdict {
    * produkt klienta w ocenę przez jednostkę notyfikowaną, dla której nie
    * istnieje ustalona metoda wykazania zgodności — więc komplet zaliczonych
    * testów nie tylko nie pomaga, ale jest mylący.
+   *
+   * Pod uwagę biorą się wyłącznie uzasadnienia **nie wycofane**. Deklaracja wycofana przestaje blokować i to jest decyzja, nie przeoczenie:
+   * inaczej jedna pomyłka w polu wyboru unieruchamiałaby wersję polityki na
+   * zawsze, bez żadnej drogi wyjścia poza ręcznym DELETE w bazie. Reguła,
+   * która nie ma legalnej drogi odwrotu, uczy obchodzenia systemu — a wtedy
+   * przestaje chronić cokolwiek. Ślad po wycofanej deklaracji zostaje w tabeli
+   * razem z powodem wycofania.
    */
-  const asSafetyFunction = input.safetyCases.find((c) => c.declaredAsSafetyFunction)
+  const asSafetyFunction = input.safetyCases.find(
+    (c) => c.declaredAsSafetyFunction && c.status !== 'withdrawn',
+  )
   if (asSafetyFunction) {
     return {
       cleared: false,

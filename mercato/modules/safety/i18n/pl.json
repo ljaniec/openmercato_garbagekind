@@ -1,0 +1,18 @@
+{
+  "safety.nav.group": "Physical AI",
+  "safety.clearance.title": "Bezpieczeństwo",
+  "safety.clearance.subtitle": "Uzasadnienia per klasa celi, zestawy ewaluacyjne i incydenty",
+  "safety.clearance.empty": "Brak uzasadnień bezpieczeństwa.",
+  "safety.case.draft": "Wersja robocza",
+  "safety.case.approved": "Zatwierdzone",
+  "safety.case.withdrawn": "Wycofane",
+  "safety.case.expired": "Wygasłe",
+  "safety.result.pass": "Zaliczony",
+  "safety.result.fail": "Niezaliczony",
+  "safety.result.error": "Błąd przebiegu",
+  "safety.harm.none": "Bez skutku",
+  "safety.harm.near_miss": "Zdarzenie potencjalnie wypadkowe",
+  "safety.harm.first_aid": "Pierwsza pomoc",
+  "safety.harm.lost_time": "Niezdolność do pracy",
+  "safety.harm.serious": "Ciężkie"
+}

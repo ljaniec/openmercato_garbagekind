@@ -1,6 +1,6 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { z } from 'zod'
-import { registerCommand, type CommandHandler } from '@open-mercato/shared/lib/commands'
+import { registerCommand, type CommandBus, type CommandHandler } from '@open-mercato/shared/lib/commands'
 import { mayRunPolicy } from '../../fleet/lib/lifecycle'
 import { mayBeDeployed } from '../../policy_registry/lib/compatibility'
 import { Assignment, Lease, StateReport, type DesiredState } from '../data/entities'
@@ -78,12 +78,13 @@ type RobotRow = {
   embodiment_revision_id: string
   cell_id: string | null
   risk_class: string | null
+  cell_class: string | null
 }
 
 async function loadRobot(em: EntityManager, robotId: string, tenantId: string): Promise<RobotRow | null> {
   const rows = await em.getConnection().execute<RobotRow[]>(
     `select r.id, r.tenant_id, r.organization_id, r.state, r.serial_number,
-            r.embodiment_revision_id, r.cell_id, c.risk_class
+            r.embodiment_revision_id, r.cell_id, c.risk_class, c.cell_class
        from fleet_robots r
        left join fleet_cells c on c.id = r.cell_id
       where r.id = ? and r.tenant_id = ? and r.deleted_at is null
@@ -166,6 +167,41 @@ const assignCommand: CommandHandler<
 
     const riskClass = robot.risk_class
     const leaseSeconds = leaseSecondsFor(riskClass)
+
+    /**
+     * Brama dopuszczenia bezpieczeństwa — dodana przy fazie 5.
+     *
+     * Kierunek zależności jest tu odwrotny do intuicyjnego: to `deployment`
+     * woła `safety`, a nie odwrotnie. Wariant z subskrybentem zdarzeń, który
+     * odwołuje przypisanie po fakcie, wygląda czyściej — moduł bezpieczeństwa
+     * nie jest wtedy zależnością kanału stanu pożądanego — i został odrzucony,
+     * bo zostawia okno, w którym robot pracuje niedopuszczoną polityką,
+     * a długość tego okna zależy od opóźnienia kolejki. Dopuszczenie jest
+     * warunkiem wstępnym przypisania, nie jego skutkiem ubocznym.
+     *
+     * `allowNonOperational` **nie** omija tej bramy. Tryb cieniowy dotyczy
+     * stanu robota, nie dopuszczenia polityki do klasy celi.
+     */
+    const bus = ctx.container.resolve('commandBus') as CommandBus
+    const clearance = (
+      await bus.execute('safety.clearance.check', {
+        input: {
+          organizationId: input.organizationId,
+          tenantId: input.tenantId,
+          policyVersionId: input.policyVersionId,
+          cellClass: robot.cell_class ?? '',
+          riskClass,
+        },
+        ctx,
+      })
+    ).result as { cleared?: boolean; reasons?: string[] }
+
+    if (!clearance?.cleared) {
+      throw new Error(
+        `Wersja ${version.policy_key} v${version.version} nie jest dopuszczona do klasy celi ${robot.cell_class ?? '(brak)'}: ` +
+          `${(clearance?.reasons ?? ['brak odpowiedzi warstwy bezpieczeństwa']).join('; ')}.`,
+      )
+    }
 
     // Poprzednie czynne przypisanie odchodzi w historię, nie znika.
     const previous = (await em.findOne(Assignment, {

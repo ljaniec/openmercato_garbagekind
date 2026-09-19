@@ -52,9 +52,12 @@ function makeCtx(options: {
   session?: Row | null
   keys?: Row[]
   maxSequence?: number | null
+  /** Odpowiedź bramy dopuszczenia; domyślnie „dopuszczone". */
+  clearance?: { cleared: boolean; reasons?: string[] }
 } = {}) {
   const persisted: Row[] = []
   const executed: string[] = []
+  const commands: string[] = []
 
   const em = {
     fork: () => em,
@@ -112,10 +115,34 @@ function makeCtx(options: {
     }),
   }
 
+  /**
+   * Szyna komend w atrapie.
+   *
+   * Przypisanie woła `safety.clearance.check` przed zapisem (brama dodana
+   * przy fazie 5). Domyślna odpowiedź to „dopuszczone", bo testy tego pliku
+   * badają bramki stanu robota, statusu wersji i rewizji embodimentu —
+   * brama dopuszczenia ma własne testy w module `safety` i osobny przypadek
+   * niżej. Bez domyślnej odpowiedzi każdy test wywracałby się na braku
+   * dopuszczenia zamiast na badanym warunku.
+   */
+  const commandBus = {
+    execute: jest.fn(async (id: string) => {
+      commands.push(id)
+      if (id === 'safety.clearance.check') {
+        return { result: options.clearance ?? { cleared: true, reasons: [] } }
+      }
+      return { result: {} }
+    }),
+  }
+
   return {
     persisted,
     executed,
-    ctx: { container: { resolve: () => em }, auth: { sub: 'user-1' } } as never,
+    commands,
+    ctx: {
+      container: { resolve: (key: string) => (key === 'commandBus' ? commandBus : em) },
+      auth: { sub: 'user-1' },
+    } as never,
   }
 }
 
@@ -176,6 +203,33 @@ describe('deployment.assignments.assign — bramki wstępne', () => {
   it('odmawia robotowi bez celi, bo nie ma z czego wyznaczyć dzierżawy', async () => {
     const { ctx } = makeCtx({ robot: { ...ROBOT, cell_id: null, risk_class: null } })
     await expect(assignCommand.execute(assignInput, ctx)).rejects.toThrow(/nie stoi w żadnej celi/)
+  })
+
+  it('odmawia, gdy polityka nie jest dopuszczona do klasy celi', async () => {
+    // Brama dodana przy fazie 5: dopuszczenie jest warunkiem wstępnym
+    // przypisania, nie jego skutkiem ubocznym.
+    const { ctx, persisted } = makeCtx({
+      clearance: { cleared: false, reasons: ['brak zatwierdzonego uzasadnienia dla klasy celi fenced-pick-place'] },
+    })
+    await expect(assignCommand.execute(assignInput, ctx)).rejects.toThrow(/nie jest dopuszczona do klasy celi/)
+    expect(persisted).toHaveLength(0)
+  })
+
+  it('allowNonOperational NIE omija bramy dopuszczenia', async () => {
+    // Tryb cieniowy dotyczy stanu robota, nie dopuszczenia polityki do celi.
+    const { ctx } = makeCtx({
+      robot: { ...ROBOT, state: 'ready' },
+      clearance: { cleared: false, reasons: ['brak kompletu ewaluacji'] },
+    })
+    await expect(
+      assignCommand.execute({ ...assignInput, allowNonOperational: true }, ctx),
+    ).rejects.toThrow(/nie jest dopuszczona/)
+  })
+
+  it('brama dopuszczenia jest wołana przed zapisem, nie po', async () => {
+    const { ctx, commands } = makeCtx()
+    await assignCommand.execute(assignInput, ctx)
+    expect(commands).toContain('safety.clearance.check')
   })
 
   it('poprzednie przypisanie odchodzi w historię zamiast znikać', async () => {
