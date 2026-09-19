@@ -1,6 +1,6 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { CommandBus, CommandRuntimeContext } from '@open-mercato/shared/lib/commands'
-import { AuthorizationGrant, PhysicalIntent } from '../../data/entities'
+import { AuthorizationGrant } from '../../data/entities'
 import { grantScopeDigest } from '../../commands/authorization'
 import { gateCheck, type GateCheck, type GateContext } from './types'
 
