@@ -19,7 +19,9 @@ CREATE TABLE debtorsmaster (
     debtortype   TEXT NOT NULL,   -- DOS = dostawca, ODB = odbiorca
     currcode     TEXT NOT NULL,
     clientsince  TEXT NOT NULL,   -- YYYY-MM-DD
-    creditlimit  REAL NOT NULL
+    creditlimit  REAL NOT NULL,
+    taxref       TEXT NOT NULL DEFAULT '',  -- NIP; w webERP tez nazywa sie taxref
+    bdonumber    TEXT NOT NULL DEFAULT ''   -- numer rejestrowy BDO
 );
 
 -- Frakcje odpadow jako pozycje magazynowe.
@@ -29,7 +31,8 @@ CREATE TABLE stockmaster (
     categoryid    TEXT NOT NULL,
     units         TEXT NOT NULL,  -- legacy trzyma masy w kilogramach
     actualcost    REAL NOT NULL,
-    decimalplaces INTEGER NOT NULL
+    decimalplaces INTEGER NOT NULL,
+    recoverycode  TEXT NOT NULL DEFAULT ''  -- kod procesu odzysku (R1, R3, R4, R5)
 );
 
 -- Boksy i magazyny.
@@ -59,9 +62,21 @@ CREATE TABLE stockmoves (
     trandate     TEXT NOT NULL,    -- ISO 8601, sekundowa rozdzielczosc
     debtorno     TEXT,             -- NULL dla ruchow wewnetrznych (SORT)
     qty          REAL NOT NULL,    -- kg; WZ jest ujemne (konwencja webERP)
-    standardcost REAL NOT NULL
+    standardcost REAL NOT NULL,
+    orderno      INTEGER           -- WZ wskazuje zamowienie; NULL dla PZ i SORT
 );
 CREATE INDEX idx_stockmoves_trandate ON stockmoves(trandate);
+
+-- Wplaty odbiorcow. W webERP rozrachunki z odbiorcami siedza w `debtortrans`
+-- i tam tez trafiaja faktury oraz zaplaty; tutaj wystarcza same zaplaty.
+CREATE TABLE debtortrans (
+    transno   INTEGER PRIMARY KEY,
+    debtorno  TEXT NOT NULL REFERENCES debtorsmaster(debtorno),
+    orderno   INTEGER REFERENCES salesorders(orderno),
+    transdate TEXT NOT NULL,    -- YYYY-MM-DD
+    type      TEXT NOT NULL,    -- ZAPL = wplata odbiorcy
+    amount    REAL NOT NULL     -- brutto w PLN
+);
 
 -- Wydania do odbiorcy.
 CREATE TABLE salesorders (

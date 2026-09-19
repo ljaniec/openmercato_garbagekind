@@ -19,31 +19,61 @@ Zdanie, które wolno powiedzieć ze sceny:
 
 Zdanie, którego powiedzieć **nie wolno**: „zintegrowaliśmy się z webERP”.
 
-Podział metod jest oznaczony w kodzie (`legacy/server.py`):
+**Żadnych metod wymyślonych.** Powierzchnia XML-RPC zawiera wyłącznie metody,
+które w webERP istnieją. Danych, których webERP przez XML-RPC nie wystawia,
+nie udajemy zaślepką — przychodzą tam, skąd przychodzą w prawdziwym wdrożeniu:
+z drugiej bazy, z raportu, z excelka podesłanego przez księgowość.
 
-| Odwzorowane z webERP | Dodane na potrzeby tego systemu (nie ma ich w webERP) |
-| --- | --- |
-| `xmlrpc_Login`, `xmlrpc_GetCustomer`, `xmlrpc_GetLocationList`, `xmlrpc_GetLocationDetails`, `xmlrpc_GetStockBalance`, `xmlrpc_GetSalesOrderHeader` | `xmlrpc_GetCustomerList`, `xmlrpc_GetStockList`, `xmlrpc_GetStockMovesSince` |
+## Dwa kanały danych
+
+| Kanał | Co daje | Czym jest w prawdziwym wdrożeniu |
+| --- | --- | --- |
+| XML-RPC (`legacy/server.py`) | dane kontrahenta, lista i szczegóły lokalizacji, stany magazynowe, nagłówki wydań | API webERP, jeden do jednego |
+| Zrzut plikowy (`legacy/spooler.py` → katalog `wsad/`) | katalog kontrahentów (same klucze), katalog frakcji, księga ruchów | nocny eksport, raport z innej bazy, excelek z księgowości |
+
+Klient (`client/weberp_sync.py`) łączy oba: klucze bierze ze zrzutu, a wartości
+— gdzie się da — dociąga po XML-RPC. `wsad/ruchy.xlsx` czyta własnym czytnikiem
+`.xlsx` (`legacy/xlsx.py`, sama biblioteka standardowa), więc podmiana tego pliku
+na prawdziwy arkusz od księgowości nie wymaga zmiany kodu.
+
+Podział danych wygląda tak:
+
+| Plik wynikowy | Klucze | Wartości |
+| --- | --- | --- |
+| `kontrahenci.csv` | `wsad/kontrahenci.csv` | `xmlrpc_GetCustomer` |
+| `frakcje.csv` | `wsad/frakcje.csv` | `wsad/frakcje.csv` |
+| `lokalizacje.csv` | `xmlrpc_GetLocationList` | `xmlrpc_GetLocationDetails` |
+| `stany.csv` | frakcje × lokalizacje | `xmlrpc_GetStockBalance` |
+| `ruchy.csv` | `wsad/ruchy.xlsx` | `wsad/ruchy.xlsx` |
 
 ## Szybki start
 
 Wymagania: Python 3.11+, wyłącznie biblioteka standardowa. Żadnych zależności.
 
 ```bash
-./run_demo.sh                 # generator -> serwer -> klient pełny -> klient przyrostowy
-PAUSE=5 ./run_demo.sh --reserve-step 3   # szybsza wersja na próbę
+./run_demo.sh                              # generator -> serwer + spooler -> klient pełny -> przyrostowy
+PAUSE=5 ./run_demo.sh --reserve-step 3     # szybsza wersja na próbę
 ```
 
 Albo krok po kroku:
 
 ```bash
-python3 legacy/generate.py --db legacy/sortownia.db
-python3 legacy/server.py   --db legacy/sortownia.db --port 8088
-python3 client/weberp_sync.py --url http://127.0.0.1:8088/api/api_xml-rpc.php --out out --full
+python3 legacy/generate.py --db legacy/sortownia.db --wsad legacy/wsad
+python3 legacy/server.py   --db legacy/sortownia.db --port 8088       # kanał XML-RPC
+python3 legacy/spooler.py  --db legacy/sortownia.db --wsad legacy/wsad --interval 5   # kanał plikowy
+python3 client/weberp_sync.py --url http://127.0.0.1:8088/api/api_xml-rpc.php \
+    --wsad legacy/wsad --out out --full
 python3 client/weberp_sync.py --out out        # kolejne uruchomienia: tryb przyrostowy
 ```
 
 Konto testowe: `demo` / `demo`, firma `weberpdemo`. Inne uwierzytelnianie jest poza zakresem.
+
+## Interfejs użytkownika
+
+`webui/simag.html` to makieta siermiężnego UI systemu legacy: kartoteki,
+księga ruchów, stany w układzie krzyżowym, ekran eksportu. Otwiera się
+bezpośrednio w przeglądarce, dane generuje po stronie klienta tym samym ziarnem
+co `legacy/generate.py` — to poglądowa replika, nie widok na bazę.
 
 ## Model danych
 
@@ -63,10 +93,16 @@ Open Mercato normalizuje do Mg. Konwersja jest świadomym elementem demo:
 pokazuje realny problem migracyjny, a nie tylko przepisanie wierszy — klient
 emituje obie wartości (`ilosc_kg`, `ilosc_mg`).
 
-**Typy ruchu** (`stockmoves.type`): `PZ` przyjęcie odpadu, `SORT` wysortowanie
-frakcji, `WZ` wydanie do odbiorcy (ilość ujemna, konwencja webERP).
+**Typy ruchu** (`stockmoves.type`): `PZ` przyjęcie odpadu na plac, `SORT`
+wysortowanie frakcji, `WZ` wydanie do odbiorcy (ilość ujemna, konwencja webERP).
 Prawdziwy webERP używa w tym miejscu numerycznych `systypes`. To uproszczenie
 jest świadome i oznaczone w schemacie, żeby nikt nie budował na nim fałszywej precyzji.
+
+**`SORT` to para wierszy**, jak przesunięcie międzymagazynowe: minus na placu
+przyjęć, plus w boksie. Generator prowadzi saldo i pozwala wydać albo wysortować
+tylko tyle, ile naprawdę leży, więc **żaden stan nie schodzi poniżej zera** —
+pilnuje tego test. Bioodpady jadą wprost z placu do kompostowni i nie mają
+ruchu `SORT`.
 
 ## Zbiory danych
 
@@ -75,10 +111,10 @@ jest świadome i oznaczone w schemacie, żeby nikt nie budował na nim fałszywe
   z ostatnich 30 dni. To migrujecie na scenie w akcie pierwszym.
 * **Zbiór zapasowy (input testowy)** — ok. 60 dodatkowych ruchów ze znacznikami
   czasu ustawionymi do przodu (domyślnie co 20 s od chwili generowania).
-  Serwer pokazuje wyłącznie ruchy, których `trandate` już minęła, więc kolejne
-  wywołania `GetStockMovesSince` znajdują nowe rekordy. Na scenie daje to efekt
-  żywej synchronizacji przyrostowej; poza sceną służy jako input testowy do
-  sprawdzania, czy import nie duplikuje i nie gubi rekordów.
+  Spooler zrzuca do `wsad/ruchy.xlsx` wyłącznie ruchy, których `trandate` już
+  minęła, więc plik rośnie i kolejne uruchomienia klienta znajdują nowe rekordy.
+  Na scenie daje to efekt żywej synchronizacji przyrostowej; poza sceną służy
+  jako input testowy do sprawdzania, czy import nie duplikuje i nie gubi rekordów.
 
 Tempo ujawniania: `python3 legacy/generate.py --reserve-step 5`.
 Ziarno generatora jest stałe — ta sama baza przy każdym uruchomieniu.
@@ -90,14 +126,15 @@ Endpoint: `POST /api/api_xml-rpc.php` (ścieżka celowo taka jak w webERP).
 | Metoda | Argumenty | Zwraca |
 | --- | --- | --- |
 | `weberp.xmlrpc_Login` | `user, password, company` | `int`, `0` = sukces, plus `Set-Cookie: PHPSESSID` |
-| `weberp.xmlrpc_GetCustomerList` | brak | lista kontrahentów |
 | `weberp.xmlrpc_GetCustomer` | `debtorno` | jeden kontrahent |
 | `weberp.xmlrpc_GetLocationList` | brak | lista lokalizacji |
 | `weberp.xmlrpc_GetLocationDetails` | `loccode` | jedna lokalizacja |
-| `weberp.xmlrpc_GetStockList` | brak | lista frakcji |
 | `weberp.xmlrpc_GetStockBalance` | `stockid, loccode` | stan magazynowy |
-| `weberp.xmlrpc_GetStockMovesSince` | `iso_timestamp` | ruchy nowsze niż podany czas |
 | `weberp.xmlrpc_GetSalesOrderHeader` | `orderno` | nagłówek wydania |
+
+Dyspozytor ma jawną listę dozwolonych nazw (`ALLOWED_METHODS`); wszystko poza
+nią, łącznie z kuszącymi `GetCustomerList`, `GetStockList` czy
+`GetStockMovesSince`, to `Fault -32601`. Pilnuje tego osobny test.
 
 Kody zwrotne: `0` logowanie OK, `3` złe dane logowania, `4` zła firma,
 `-1` brak ważnej sesji, `-2` brak rekordu. Każda metoda poza `Login` zwraca `-1`
@@ -121,7 +158,7 @@ Słowniki i stany są nadpisywane pełnym snapshotem; `ruchy.csv` jest dopisywan
 przyrostowo z kontrolą duplikatów po `stkmoveno`.
 
 **Znacznik `.last_sync`** jest zapisywany jako najnowsza `trandate` minus jedna
-sekunda. Serwer filtruje ostro (`trandate > since`), a ruchy mogą dzielić tę samą
+sekunda. Filtr jest ostry (`trandate > since`), a ruchy mogą dzielić tę samą
 sekundę — cofnięcie o sekundę chroni przed zgubieniem rekordu z granicy,
 a powstałe nakładanie odsiewa kontrola po `stkmoveno`. Świadomie wybrano
 „powtórzyć i odsiać” zamiast „pominąć i zgubić”.
@@ -131,13 +168,16 @@ a powstałe nakładanie odsiewa kontrola po `stkmoveno`. Świadomie wybrano
 ```bash
 python3 client/weberp_sync.py \
   --url https://twoj-weberp.example/api/api_xml-rpc.php \
-  --user <user> --password <haslo> --company <firma> --out out --full
+  --user <user> --password <haslo> --company <firma> \
+  --wsad /sciezka/do/eksportu --out out --full
 ```
 
-Zadziała cała ścieżka logowania, sesji i metod odwzorowanych. Trzy metody dodane
-(`GetCustomerList`, `GetStockList`, `GetStockMovesSince`) w prawdziwym webERP nie
-istnieją — tam trzeba je zastąpić odpowiednio listą klientów z bazy, listą pozycji
-magazynowych i zapytaniem o `stockmoves`. To jedyny, znany i nazwany dług tej integracji.
+Kanał XML-RPC działa bez zmian w kodzie: logowanie, sesja i wszystkie pięć metod
+danych istnieją w webERP. Kanał plikowy trzeba podłączyć pod prawdziwy eksport —
+`kontrahenci.csv`/`.xlsx` z kolumną `debtorno`, `frakcje.csv`/`.xlsx` z kolumnami
+`stockid, description, categoryid, units, actualcost`, `ruchy.xlsx`/`.csv`
+z kolumnami `stkmoveno, stockid, type, loccode, trandate, debtorno, qty,
+standardcost`. Klient przyjmuje CSV i XLSX zamiennie (`.xlsx` ma pierwszeństwo).
 
 ## Testy
 
@@ -145,13 +185,16 @@ magazynowych i zapytaniem o `stockmoves`. To jedyny, znany i nazwany dług tej i
 python3 -m unittest discover -s tests -t . -v
 ```
 
-Pokrywają kryteria gotowości z rozdziału 6 specyfikacji: generator, logowanie
-z ciasteczkiem, ścieżka `-1` bez sesji, komplet plików CSV, tryb przyrostowy bez
-duplikatów i bez gubienia rekordów, brak wycieku ruchów z przyszłości.
+Pokrywają kryteria gotowości z rozdziału 6 specyfikacji: generator i zrzut
+plikowy, logowanie z ciasteczkiem, ścieżka `-1` bez sesji, brak metod spoza
+webERP (po stronie serwera i klienta), czytelność excelka, narastanie zrzutu
+w czasie, komplet plików CSV, tryb przyrostowy bez duplikatów i bez gubienia
+rekordów.
 
 ## Poza zakresem
 
 Księgowość, plan kont, podatki, uwierzytelnianie inne niż jedno konto testowe,
 jakiekolwiek zapisy z powrotem do legacy. System jest tylko źródłem danych, nigdy
-celem zapisu. Robot pisze do Open Mercato, nie tutaj — serwer otwiera bazę SQLite
-w trybie tylko do odczytu (`mode=ro`) i nie wystawia żadnej metody zapisującej.
+celem zapisu. Robot pisze do Open Mercato, nie tutaj — serwer i spooler otwierają
+bazę SQLite w trybie tylko do odczytu (`mode=ro`) i nie wystawiają żadnej metody
+zapisującej.
