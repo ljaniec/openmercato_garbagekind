@@ -12,16 +12,19 @@ import {
   fractionsFile,
   customersFile,
   ordersFile,
+  paymentsFile,
   movementsFile,
   readFractions,
   readCustomers,
   readOrders,
+  readPayments,
   readMovements,
   type LegacyMovementRow,
 } from './lib/legacyFiles'
 import { ensureCustomers } from './lib/customers'
 import { ensureFractions, loadFractionIndex } from './lib/fractions'
 import { applySalesOrders } from './lib/salesOrders'
+import { applyPayments } from './lib/payments'
 import { applyMovementBatch, type MovementContext } from './lib/movements'
 import { ensureTopology, loadLocationIndex } from './lib/topology'
 
@@ -157,7 +160,23 @@ const importCommand: ModuleCli = {
       console.log(`  zamówienia: pominięto (brak pliku albo kontrahentów)`)
     }
 
-    // 5. Księga ruchów — kanał plikowy, zapis przez komendy WMS.
+    // 5. Wpłaty odbiorców — rozliczane na fakturach.
+    const paymentsPath = paymentsFile()
+    if ((await fileExists(paymentsPath)) && salesOrderIndex.size > 0) {
+      const rows = await readPayments(paymentsPath)
+      const result = await applyPayments(
+        { em, commandBus, commandContext, scope, orders: salesOrderIndex },
+        rows,
+      )
+      const created = result.outcomes.filter((o) => o.action === 'create').length
+      const failedPayments = result.outcomes.filter((o) => o.action === 'failed')
+      console.log(`  wpłaty: ${rows.length} pozycji (nowych ${created}, istniejących ${result.outcomes.length - created - failedPayments.length})`)
+      for (const outcome of failedPayments.slice(0, 5)) console.log(`    ! wpłata ${outcome.transno}: ${outcome.error}`)
+    } else {
+      console.log('  wpłaty: pominięto (brak pliku albo zamówień)')
+    }
+
+    // 6. Księga ruchów — kanał plikowy, zapis przez komendy WMS.
     const movementsPath = movementsFile()
     if (!(await fileExists(movementsPath))) throw new Error(`Brak księgi ruchów: ${movementsPath}`)
 

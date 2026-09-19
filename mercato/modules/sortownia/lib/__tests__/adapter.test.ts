@@ -1,6 +1,7 @@
 import {
   ENTITY_CUSTOMERS,
   ENTITY_FRACTIONS,
+  ENTITY_PAYMENTS,
   ENTITY_SALES_ORDERS,
   ENTITY_MOVEMENTS,
   ENTITY_TOPOLOGY,
@@ -85,7 +86,7 @@ describe('parseMovementCursor', () => {
 })
 
 describe('kontrakt adaptera', () => {
-  it('przedstawia się hubowi jako import z pięcioma zbiorami danych', () => {
+  it('przedstawia się hubowi jako import z sześcioma zbiorami danych', () => {
     expect(sortowniaLegacyAdapter.providerKey).toBe(PROVIDER_KEY)
     expect(sortowniaLegacyAdapter.direction).toBe('import')
     expect(sortowniaLegacyAdapter.supportedEntities).toEqual([
@@ -93,6 +94,7 @@ describe('kontrakt adaptera', () => {
       ENTITY_FRACTIONS,
       ENTITY_CUSTOMERS,
       ENTITY_SALES_ORDERS,
+      ENTITY_PAYMENTS,
       ENTITY_MOVEMENTS,
     ])
   })
@@ -102,6 +104,8 @@ describe('kontrakt adaptera', () => {
     expect(order.indexOf(ENTITY_CUSTOMERS)).toBeLessThan(order.indexOf(ENTITY_SALES_ORDERS))
     expect(order.indexOf(ENTITY_FRACTIONS)).toBeLessThan(order.indexOf(ENTITY_SALES_ORDERS))
     expect(order.indexOf(ENTITY_SALES_ORDERS)).toBeLessThan(order.indexOf(ENTITY_MOVEMENTS))
+    // Wpłata nie ma czego rozliczyć, dopóki nie ma faktury z zamówienia.
+    expect(order.indexOf(ENTITY_SALES_ORDERS)).toBeLessThan(order.indexOf(ENTITY_PAYMENTS))
   })
 
   it('daje operatorowi przebieg próbny i nie wystawia żadnego parametru z sekretem', () => {

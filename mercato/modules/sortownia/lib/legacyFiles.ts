@@ -46,6 +46,15 @@ export type LegacyOrderRow = {
   cenaKg: number
 }
 
+export type LegacyPaymentRow = {
+  transno: number
+  debtorno: string
+  orderno: number
+  data: string
+  typ: string
+  kwotaBrutto: number
+}
+
 export type LegacyFractionRow = {
   stockid: string
   nazwa: string
@@ -147,6 +156,10 @@ export function ordersFile(): string {
   return path.join(legacyOutDir(), 'zamowienia.csv')
 }
 
+export function paymentsFile(): string {
+  return path.join(legacyOutDir(), 'zaplaty.csv')
+}
+
 export async function* readMovements(filePath: string): AsyncGenerator<LegacyMovementRow> {
   for await (const row of readCsvRows(filePath)) {
     const stkmoveno = Number.parseInt(row.stkmoveno ?? '', 10)
@@ -201,6 +214,27 @@ export async function readOrders(filePath: string): Promise<LegacyOrderRow[]> {
       stockid: row.stockid,
       iloscKg: toNumber(row.ilosc_kg),
       cenaKg: toNumber(row.cena_kg),
+    })
+  }
+  return out
+}
+
+export async function readPayments(filePath: string): Promise<LegacyPaymentRow[]> {
+  const out: LegacyPaymentRow[] = []
+  for await (const row of readCsvRows(filePath)) {
+    const transno = Number.parseInt(row.transno ?? '', 10)
+    const orderno = Number.parseInt(row.orderno ?? '', 10)
+    if (!Number.isFinite(transno) || !Number.isFinite(orderno)) continue
+    const kwotaBrutto = toNumber(row.kwota_brutto)
+    // Wpłata zerowa albo ujemna to nie wpłata — zwrot ma własny dokument.
+    if (kwotaBrutto <= 0) continue
+    out.push({
+      transno,
+      debtorno: row.debtorno ?? '',
+      orderno,
+      data: row.data ?? '',
+      typ: (row.typ ?? '').toUpperCase(),
+      kwotaBrutto,
     })
   }
   return out

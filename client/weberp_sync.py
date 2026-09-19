@@ -259,6 +259,13 @@ def sync(url: str, out_dir: pathlib.Path, user: str, password: str, company: str
 
     client.close()
 
+    # --- zaplaty: w calosci ze zrzutu (webERP nie wystawia rozrachunkow) -----
+    payments = read_table(find_drop(wsad_dir, "zaplaty"))
+    write_csv(out_dir / "zaplaty.csv",
+              ["transno", "debtorno", "orderno", "data", "typ", "kwota_brutto"],
+              [[p["transno"], p["debtorno"], p["orderno"], p["transdate"], p["type"], p["amount"]]
+               for p in payments])
+
     # --- ruchy: ksiega ze zrzutu, import przyrostowy -------------------------
     client.log(f"Ruchy od: {since}")
     ledger = read_table(find_drop(wsad_dir, "ruchy"))
@@ -284,6 +291,7 @@ def sync(url: str, out_dir: pathlib.Path, user: str, password: str, company: str
     stats = {
         "kontrahenci": len(customer_rows),
         "zamowienia": len(order_rows),
+        "zaplaty": len(payments),
         "frakcje": len(stocks),
         "lokalizacje": len(location_rows),
         "stany": len(balance_rows),

@@ -18,14 +18,17 @@ import {
   legacyOutDir,
   movementsFile,
   ordersFile,
+  paymentsFile,
   readCustomers,
   readFractions,
   readMovements,
   readOrders,
+  readPayments,
   type LegacyMovementRow,
 } from './legacyFiles'
 import { ensureCustomers, loadCustomerIndex } from './customers'
 import { applySalesOrders, loadSalesOrderIndex } from './salesOrders'
+import { applyPayments } from './payments'
 import { ensureFractions, loadFractionIndex } from './fractions'
 import { applyMovementBatch, type MovementContext } from './movements'
 import { ensureTopology, loadLocationIndex } from './topology'
@@ -46,6 +49,7 @@ export const ENTITY_FRACTIONS = 'sortownia.fractions'
 export const ENTITY_MOVEMENTS = 'sortownia.movements'
 export const ENTITY_CUSTOMERS = 'sortownia.customers'
 export const ENTITY_SALES_ORDERS = 'sortownia.salesOrders'
+export const ENTITY_PAYMENTS = 'sortownia.payments'
 
 type Container = Awaited<ReturnType<typeof createRequestContainer>>
 
@@ -173,6 +177,16 @@ const MAPPINGS: Record<string, DataMapping> = {
       { externalField: 'cena_kg', localField: 'lines.unitPriceNet', mappingKind: 'core', required: true },
     ],
   },
+  [ENTITY_PAYMENTS]: {
+    entityType: ENTITY_PAYMENTS,
+    matchStrategy: 'externalId',
+    fields: [
+      { externalField: 'transno', localField: 'paymentReference', mappingKind: 'external_id', required: true, dedupeRole: 'primary' },
+      { externalField: 'orderno', localField: 'orderId', mappingKind: 'relation', required: true },
+      { externalField: 'kwota_brutto', localField: 'amount', mappingKind: 'core', required: true },
+      { externalField: 'data', localField: 'receivedAt', mappingKind: 'core' },
+    ],
+  },
   [ENTITY_MOVEMENTS]: {
     entityType: ENTITY_MOVEMENTS,
     matchStrategy: 'externalId',
@@ -195,6 +209,7 @@ export const sortowniaLegacyAdapter: DataSyncAdapter = {
     // i frakcji, a ruch WZ potrzebuje zamówienia, żeby je wskazać.
     ENTITY_CUSTOMERS,
     ENTITY_SALES_ORDERS,
+    ENTITY_PAYMENTS,
     ENTITY_MOVEMENTS,
   ],
   runMode: 'generic',
@@ -393,6 +408,47 @@ export const sortowniaLegacyAdapter: DataSyncAdapter = {
         message: dryRun
           ? `Przebieg próbny: ${rows.length} zamówień w zrzucie.`
           : `Zsynchronizowano zamówienia: ${rows.length} pozycji (nowych ${created}, faktur ${invoiced}).`,
+      }
+      return
+    }
+
+    if (input.entityType === ENTITY_PAYMENTS) {
+      const file = paymentsFile()
+      if (!(await fileExists(file))) {
+        throw new Error(`Brak wpłat w zrzucie: ${file}`)
+      }
+      const rows = await readPayments(file)
+      const items: ImportItem[] = rows.map((row) => ({
+        externalId: String(row.transno),
+        data: row as unknown as Record<string, unknown>,
+        action: 'update',
+      }))
+
+      let created = 0
+      if (!dryRun) {
+        const result = await applyPayments(
+          {
+            em,
+            commandBus: container.resolve('commandBus') as CommandBus,
+            commandContext: buildCommandContext(container, scope),
+            scope,
+            orders: await loadSalesOrderIndex(em, scope),
+          },
+          rows,
+        )
+        created = result.outcomes.filter((outcome) => outcome.action === 'create').length
+      }
+
+      yield {
+        items,
+        cursor: JSON.stringify({ paymentsSyncedAt: new Date().toISOString() }),
+        hasMore: false,
+        totalEstimate: rows.length,
+        processedCount: rows.length,
+        batchIndex: 0,
+        message: dryRun
+          ? `Przebieg próbny: ${rows.length} wpłat w zrzucie.`
+          : `Zsynchronizowano wpłaty: ${rows.length} pozycji (nowych ${created}).`,
       }
       return
     }

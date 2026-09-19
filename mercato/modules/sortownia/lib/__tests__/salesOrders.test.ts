@@ -25,11 +25,26 @@ function order(overrides: Partial<LegacyOrderRow> = {}): LegacyOrderRow {
 
 function makeCtx(options: { existing?: Array<{ id: string; externalReference: string }>; issueInvoices?: boolean } = {}) {
   const calls: Array<{ id: string; input: Record<string, unknown> }> = []
+  const links: Array<{ where: unknown; data: unknown }> = []
   let counter = 0
   return {
     calls,
+    links,
     ctx: {
-      em: { find: jest.fn(async () => options.existing ?? []) } as never,
+      em: {
+        find: jest.fn(async () => options.existing ?? []),
+        // Faktura przepisuje totale z zamówienia, bo komenda faktury ich nie liczy.
+        findOne: jest.fn(async () => ({
+          grandTotalNetAmount: '1964.74',
+          grandTotalGrossAmount: '2416.63',
+        })),
+        // Obejście błędu platformy: `sales.invoices.create` gubi powiązanie
+        // z zamówieniem, więc dowiązujemy je relacją po utworzeniu faktury.
+        nativeUpdate: jest.fn(async (_entity: unknown, where: unknown, data: unknown) => {
+          links.push({ where, data })
+          return 1
+        }),
+      } as never,
       commandBus: {
         execute: jest.fn(async (id: string, payload: { input: Record<string, unknown> }) => {
           calls.push({ id, input: payload.input })
@@ -104,7 +119,21 @@ describe('applySalesOrders', () => {
     // Numerowanie dokumentów to zadanie platformy — własny licznik rozjechałby
     // się z numeracją reszty sprzedaży przy pierwszej fakturze spoza importu.
     expect(calls[1].input).not.toHaveProperty('invoiceNumber')
+    // Kwoty faktury pochodzą z zamówienia policzonego przez silnik platformy,
+    // a nie z drugiego, równoległego mnożenia po naszej stronie.
+    expect(calls[1].input.grandTotalNetAmount).toBe(1964.74)
+    expect(calls[1].input.grandTotalGrossAmount).toBe(2416.63)
     expect(result.outcomes[0].invoiced).toBe(true)
+  })
+
+  it('dowiązuje fakturę do zamówienia, bo komenda platformy gubi to powiązanie', async () => {
+    const { ctx, links } = makeCtx()
+    await applySalesOrders(ctx, [order()])
+    // `sales.invoices.create` przyjmuje `orderId`, waliduje istnienie
+    // zamówienia, a potem zapisuje encję, która ma wyłącznie relację `order`.
+    // Bez tej naprawy faktura ląduje w bazie z pustym `order_id`.
+    expect(links).toHaveLength(1)
+    expect(links[0].data).toEqual({ order: 'ord-1' })
   })
 
   it('wyłączone fakturowanie zostawia samo zamówienie', async () => {

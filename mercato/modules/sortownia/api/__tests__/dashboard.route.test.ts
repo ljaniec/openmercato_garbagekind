@@ -20,6 +20,14 @@ jest.mock('@open-mercato/shared/lib/auth/organizationScope', () => ({
   resolveActiveOrganizationId: jest.fn(async () => organizationResult),
 }))
 
+jest.mock('@open-mercato/shared/lib/encryption/find', () => ({
+  // Nazwy kontrahentów są szyfrowane w spoczynku — trasa MUSI czytać je
+  // przez warstwę deszyfrującą, więc mock odwzorowuje właśnie ją.
+  findWithDecryption: jest.fn(async () => [
+    { id: 'ent-5', displayName: 'Stora Papier Recykling' },
+  ]),
+}))
+
 jest.mock('@open-mercato/shared/lib/di/container', () => ({
   createRequestContainer: jest.fn(async () => ({
     resolve: () => ({
@@ -44,6 +52,15 @@ function defaultQueries(sql: string): unknown[] {
       { sku: '20 01 01', name: null, quantity: '4000.00', reorder_point: '8000' },
       { sku: '19 12 10', name: 'RDF', quantity: '5000.00', reorder_point: null },
     ]
+  }
+  if (sql.includes('from sales_orders o') && sql.includes('sales_invoices i')) {
+    return [{ orders: '40', net: '152372.18', gross: '187417.79', invoices: '40' }]
+  }
+  if (sql.includes('group by o.customer_entity_id')) {
+    return [{ customer_entity_id: 'ent-5', net: '120797.63', orders: '12' }]
+  }
+  if (sql.includes('with faktury as')) {
+    return [{ billed: '187417.79', paid: '35024.11', overdue_docs: '36', oldest_days: '28' }]
   }
   if (sql.includes('group by v.sku') && sql.includes('wms_inventory_movements')) {
     return [{ sku: '20 01 01', received: '63000', sorted: '50300', issued: '45700' }]
@@ -188,6 +205,25 @@ describe('GET /api/sortownia/dashboard — dane', () => {
       expect(sql).toMatch(/organization_id = \?/)
       expect(sql).toMatch(/tenant_id = \?/)
     }
+  })
+
+  it('oddaje sprzedaż i należności', async () => {
+    const body = await readBody(await GET(makeRequest()))
+    expect(body.sales).toMatchObject({
+      orders: 40,
+      invoices: 40,
+      billedPln: 187417.79,
+      paidPln: 35024.11,
+      unpaidDocs: 36,
+      oldestUnpaidDays: 28,
+    })
+    expect(body.sales.outstandingPln).toBeCloseTo(152393.68, 2)
+  })
+
+  it('nazwy odbiorców biorą się z warstwy deszyfrującej, a nie z surowego SQL-a', async () => {
+    const body = await readBody(await GET(makeRequest()))
+    // Surowy odczyt `display_name` oddaje kryptogram i ląduje on na ekranie.
+    expect(body.sales.topBuyers[0].nazwa).toBe('Stora Papier Recykling')
   })
 
   it('pokazuje jako frakcje wyłącznie pozycje przyniesione przez import z legacy', async () => {

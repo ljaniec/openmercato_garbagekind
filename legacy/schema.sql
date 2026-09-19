@@ -65,6 +65,17 @@ CREATE TABLE stockmoves (
 );
 CREATE INDEX idx_stockmoves_trandate ON stockmoves(trandate);
 
+-- Wplaty odbiorcow. W webERP rozrachunki z odbiorcami siedza w `debtortrans`
+-- i tam tez trafiaja faktury oraz zaplaty; tutaj wystarcza same zaplaty.
+CREATE TABLE debtortrans (
+    transno   INTEGER PRIMARY KEY,
+    debtorno  TEXT NOT NULL REFERENCES debtorsmaster(debtorno),
+    orderno   INTEGER REFERENCES salesorders(orderno),
+    transdate TEXT NOT NULL,    -- YYYY-MM-DD
+    type      TEXT NOT NULL,    -- ZAPL = wplata odbiorcy
+    amount    REAL NOT NULL     -- brutto w PLN
+);
+
 -- Wydania do odbiorcy.
 CREATE TABLE salesorders (
     orderno      INTEGER PRIMARY KEY,

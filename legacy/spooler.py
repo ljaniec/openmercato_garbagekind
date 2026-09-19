@@ -35,6 +35,7 @@ MOVES_FILE = "ruchy.xlsx"
 CUSTOMERS_FILE = "kontrahenci.csv"
 STOCK_FILE = "frakcje.csv"
 ORDERS_FILE = "zamowienia.csv"
+PAYMENTS_FILE = "zaplaty.csv"
 
 MOVES_HEADER = ["stkmoveno", "stockid", "type", "loccode", "trandate", "debtorno", "qty", "standardcost", "orderno"]
 
@@ -62,6 +63,11 @@ def export_catalogs(db_path: pathlib.Path, wsad_dir: pathlib.Path) -> dict:
         # Zamowienia ida tak samo jak kontrahenci: same klucze, szczegoly przez
         # xmlrpc_GetSalesOrderHeader - metode, ktora w webERP naprawde istnieje.
         orders = conn.execute("SELECT orderno FROM salesorders ORDER BY orderno").fetchall()
+        # Wplaty ida w calosci plikiem: webERP nie wystawia rozrachunkow przez
+        # XML-RPC, a wymyslanie metody, ktorej tam nie ma, jest zabronione.
+        payments = conn.execute(
+            "SELECT transno, debtorno, orderno, transdate, type, amount "
+            "FROM debtortrans ORDER BY transno").fetchall()
     finally:
         conn.close()
 
@@ -82,7 +88,15 @@ def export_catalogs(db_path: pathlib.Path, wsad_dir: pathlib.Path) -> dict:
         writer.writerow(["orderno"])
         writer.writerows([[row["orderno"]] for row in orders])
 
-    return {"kontrahenci": len(customers), "frakcje": len(stocks), "zamowienia": len(orders)}
+    with (wsad_dir / PAYMENTS_FILE).open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["transno", "debtorno", "orderno", "transdate", "type", "amount"])
+        writer.writerows([[row[k] for k in
+                           ("transno", "debtorno", "orderno", "transdate", "type", "amount")]
+                          for row in payments])
+
+    return {"kontrahenci": len(customers), "frakcje": len(stocks), "zamowienia": len(orders),
+            "zaplaty": len(payments)}
 
 
 def export_moves(db_path: pathlib.Path, wsad_dir: pathlib.Path, as_of: dt.datetime | None = None) -> int:
@@ -126,7 +140,8 @@ def main() -> None:
     counts = export_catalogs(db_path, wsad_dir)
     moves = export_moves(db_path, wsad_dir)
     print(f"Zrzut w {wsad_dir}: kontrahenci {counts['kontrahenci']}, "
-          f"frakcje {counts['frakcje']}, zamowienia {counts['zamowienia']}, ruchy {moves}")
+          f"frakcje {counts['frakcje']}, zamowienia {counts['zamowienia']}, "
+          f"zaplaty {counts['zaplaty']}, ruchy {moves}")
     if args.once:
         return
 

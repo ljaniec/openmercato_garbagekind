@@ -227,6 +227,33 @@ def attach_sales_orders(moves, start_no: int):
     return out_moves, orders
 
 
+# Stawka VAT uzywana przy wystawianiu naleznosci po stronie legacy.
+VAT = 1.23
+
+
+def make_payments(orders, rng: random.Random, now: dt.datetime, start_no: int):
+    """Wplaty odbiorcow: czesc w terminie, czesc czesciowa, czesc wcale.
+
+    Zaplacone wszystko byloby nieprawda o kazdej sortowni, jaka istnieje.
+    Rozklad jest celowo niewygodny, zeby pulpit mial co pokazac w naleznosciach.
+    """
+    payments = []
+    no = start_no
+    for orderno, debtorno, _orddate, deliverydate, _stockid, qty, unitprice in orders:
+        brutto = round(qty * unitprice * VAT, 2)
+        roll = rng.random()
+        if roll < 0.15:
+            continue                                   # nie zaplacil wcale
+        delivered = dt.datetime.fromisoformat(deliverydate)
+        paid_on = delivered + dt.timedelta(days=rng.randint(3, 45))
+        if paid_on > now:
+            continue                                   # termin jeszcze nie minal
+        amount = round(brutto * 0.5, 2) if roll < 0.25 else brutto   # czesciowa
+        payments.append((no, debtorno, orderno, paid_on.date().isoformat(), "ZAPL", amount))
+        no += 1
+    return payments
+
+
 def build(db_path: pathlib.Path, base_moves_count: int, reserve_moves_count: int, reserve_step: int,
           wsad_dir: pathlib.Path | None = None) -> None:
     rng = random.Random(SEED)
@@ -261,11 +288,14 @@ def build(db_path: pathlib.Path, base_moves_count: int, reserve_moves_count: int
         conn.execute("INSERT INTO locstock VALUES (?,?,?)", (stockid, loccode, qty))
 
     conn.executemany("INSERT INTO salesorders VALUES (?,?,?,?,?,?,?)", sales_orders)
+    payments = make_payments(sales_orders, rng, now, start_no=9001)
+    conn.executemany("INSERT INTO debtortrans VALUES (?,?,?,?,?,?)", payments)
 
     conn.commit()
     counts = {
         table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-        for table in ("debtorsmaster", "stockmaster", "locations", "locstock", "stockmoves", "salesorders")
+        for table in ("debtorsmaster", "stockmaster", "locations", "locstock", "stockmoves",
+                      "salesorders", "debtortrans")
     }
     conn.close()
 

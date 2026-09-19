@@ -72,6 +72,11 @@ type SalesSummary = {
   invoices: number
   netPln: number
   grossPln: number
+  billedPln: number
+  paidPln: number
+  outstandingPln: number
+  unpaidDocs: number
+  oldestUnpaidDays: number | null
   topBuyers: Array<{ nazwa: string; netPln: number; orders: number }>
 }
 
@@ -258,12 +263,30 @@ export default function SortowniaDashboard() {
               }
             />
             <KpiCard
-              title="Średnia wartość wydania"
-              value={sales.orders ? Math.round(sales.netPln / sales.orders) : 0}
+              title="Do zapłaty"
+              value={Math.round(sales.outstandingPln ?? 0)}
               suffix=" zł"
               loading={loading}
-              footer={<span className="text-xs text-muted-foreground">netto na dokument</span>}
+              footer={
+                <span className="text-xs text-muted-foreground">
+                  {sales.unpaidDocs
+                    ? `${sales.unpaidDocs} dokumentów${
+                        sales.oldestUnpaidDays !== null ? `, najstarszy ${sales.oldestUnpaidDays} dni` : ''
+                      }`
+                    : 'wszystko rozliczone'}
+                </span>
+              }
             />
+          </div>
+
+          <div className="rounded-lg border px-4 py-3 text-sm">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <span className="text-muted-foreground">Rozrachunki z odbiorcami</span>
+              <span className="tabular-nums">
+                wystawione {formatPln(sales.billedPln ?? 0)} · wpłacone {formatPln(sales.paidPln ?? 0)} ·{' '}
+                <strong>zaległe {formatPln(sales.outstandingPln ?? 0)}</strong>
+              </span>
+            </div>
           </div>
 
           {sales.topBuyers.length ? (

@@ -175,6 +175,44 @@ class EndToEndTest(unittest.TestCase):
         self.assertIsInstance(header, dict)
         self.assertIn("unitprice", header)
 
+    def test_payments_never_exceed_the_invoice(self) -> None:
+        """Wplata nie moze byc wyzsza niz brutto zamowienia, ktore rozlicza."""
+        conn = sqlite3.connect(self.db)
+        try:
+            rows = conn.execute(
+                "SELECT t.transno, t.amount, o.qty * o.unitprice * ? "
+                "FROM debtortrans t JOIN salesorders o ON o.orderno = t.orderno",
+                (generate.VAT,)
+            ).fetchall()
+        finally:
+            conn.close()
+        for transno, amount, brutto in rows:
+            self.assertGreater(amount, 0, f"wplata {transno} nie jest dodatnia")
+            self.assertLessEqual(round(amount, 2), round(brutto, 2) + 0.01,
+                                 f"wplata {transno} przekracza wartosc zamowienia")
+
+    def test_not_everything_is_paid(self) -> None:
+        """Gdyby placili wszyscy i w terminie, naleznosci nie istnialyby jako problem."""
+        conn = sqlite3.connect(self.db)
+        try:
+            orders = conn.execute("SELECT COUNT(*) FROM salesorders").fetchone()[0]
+            paid = conn.execute("SELECT COUNT(DISTINCT orderno) FROM debtortrans").fetchone()[0]
+        finally:
+            conn.close()
+        self.assertLess(paid, orders, "wszystkie zamowienia zaplacone - to nie jest dane realistyczne")
+
+    def test_payments_go_through_the_file_drop_only(self) -> None:
+        """Rozrachunki ida plikiem: webERP nie wystawia ich przez XML-RPC."""
+        path = self.wsad / spooler.PAYMENTS_FILE
+        self.assertTrue(path.exists())
+        with path.open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(list(rows[0].keys()),
+                         ["transno", "debtorno", "orderno", "transdate", "type", "amount"])
+        # Zadna metoda rozrachunkowa nie moze sie pojawic w powierzchni API.
+        for name in ("GetDebtorTrans", "GetPayments", "GetReceivables"):
+            self.assertNotIn(name, server.ALLOWED_METHODS)
+
     def test_drop_grows_over_time(self) -> None:
         before = len(xlsx.read(self.wsad / spooler.MOVES_FILE))
         later = dt.datetime.now() + dt.timedelta(seconds=RESERVE_STEP * 5)

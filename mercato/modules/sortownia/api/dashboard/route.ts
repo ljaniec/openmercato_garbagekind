@@ -303,6 +303,45 @@ export async function GET(req: Request): Promise<Response> {
     [scope.organizationId, scope.tenantId],
   )
 
+  // Należności: ile wystawiono, ile wpłynęło, ile wisi i od jak dawna.
+  // Wpłaty liczymy z alokacji, a nie z samych płatności — płatność bez
+  // alokacji nie zmniejsza salda żadnego dokumentu.
+  const [receivables] = await em.getConnection().execute<Array<{
+    billed: string
+    paid: string
+    overdue_docs: string
+    oldest_days: string | null
+  }>>(
+    `with faktury as (
+       select i.id,
+              i.issue_date,
+              coalesce(sum(il.total_gross_amount), 0) as brutto
+         from sales_invoices i
+         join sales_orders o on o.id = i.order_id
+         left join sales_invoice_lines il on il.invoice_id = i.id
+        where i.organization_id = ?
+          and i.tenant_id = ?
+          and i.deleted_at is null
+          and o.external_reference is not null
+        group by i.id, i.issue_date
+     ),
+     wplaty as (
+       select a.invoice_id, coalesce(sum(a.amount), 0) as kwota
+         from sales_payment_allocations a
+         join faktury f on f.id = a.invoice_id
+        group by a.invoice_id
+     )
+     select coalesce(sum(f.brutto), 0) as billed,
+            coalesce(sum(w.kwota), 0) as paid,
+            count(*) filter (where coalesce(w.kwota, 0) < f.brutto) as overdue_docs,
+            max(extract(day from now() - f.issue_date)) filter (
+              where coalesce(w.kwota, 0) < f.brutto
+            ) as oldest_days
+       from faktury f
+       left join wplaty w on w.invoice_id = f.id`,
+    [scope.organizationId, scope.tenantId],
+  )
+
   const buyerIds = buyerTotals.map((row) => row.customer_entity_id)
   const buyerEntities = buyerIds.length
     ? await findWithDecryption(
@@ -353,6 +392,12 @@ export async function GET(req: Request): Promise<Response> {
         invoices: Number.parseInt(sales?.invoices ?? '0', 10),
         netPln: Number.parseFloat(sales?.net ?? '0'),
         grossPln: Number.parseFloat(sales?.gross ?? '0'),
+        billedPln: Number.parseFloat(receivables?.billed ?? '0'),
+        paidPln: Number.parseFloat(receivables?.paid ?? '0'),
+        outstandingPln:
+          Number.parseFloat(receivables?.billed ?? '0') - Number.parseFloat(receivables?.paid ?? '0'),
+        unpaidDocs: Number.parseInt(receivables?.overdue_docs ?? '0', 10),
+        oldestUnpaidDays: receivables?.oldest_days ? Number.parseInt(receivables.oldest_days, 10) : null,
         topBuyers: buyerTotals.map((row) => ({
           nazwa: buyerNames.get(row.customer_entity_id) || 'Kontrahent bez nazwy',
           netPln: Number.parseFloat(row.net),

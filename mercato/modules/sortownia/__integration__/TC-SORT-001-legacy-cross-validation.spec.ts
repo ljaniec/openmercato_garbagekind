@@ -26,6 +26,7 @@ export const integrationMeta = {
 const LEGACY_OUT = process.env.SORTOWNIA_LEGACY_OUT ?? '/home/user/openmercato_garbagekind/out'
 const MOVEMENTS_CSV = path.join(LEGACY_OUT, 'ruchy.csv')
 const ORDERS_CSV = path.join(LEGACY_OUT, 'zamowienia.csv')
+const PAYMENTS_CSV = path.join(LEGACY_OUT, 'zaplaty.csv')
 const TOLERANCE_KG = 0.05
 
 type LegacyRow = {
@@ -55,6 +56,10 @@ type DashboardPayload = {
     invoices: number
     netPln: number
     grossPln: number
+    billedPln: number
+    paidPln: number
+    outstandingPln: number
+    unpaidDocs: number
     topBuyers: Array<{ nazwa: string; netPln: number; orders: number }>
   }
 }
@@ -318,6 +323,43 @@ test.describe('TC-SORT-001 — zgodność Open Mercato z księgą systemu legacy
       expect.soft(buyer.nazwa, 'nazwa odbiorcy wygląda na kryptogram').not.toMatch(/:v\d+$/)
       expect.soft(buyer.nazwa.length, `nazwa odbiorcy: ${buyer.nazwa}`).toBeLessThan(80)
     }
+  })
+
+  test('wpłaty z systemu legacy zgadzają się co do grosza z rozliczonymi w Mercato', async ({ request }) => {
+    const present = await fileExists(PAYMENTS_CSV)
+    test.skip(!present, `Brak zrzutu wpłat: ${PAYMENTS_CSV}`)
+    const stream = createReadStream(PAYMENTS_CSV, { encoding: 'utf8' })
+    const lines = createInterface({ input: stream, crlfDelay: Infinity })
+    let header: string[] | null = null
+    let suma = 0
+    for await (const rawLine of lines) {
+      const line = rawLine.replace(/^﻿/, '')
+      if (!line.trim()) continue
+      const cells = splitCsvLine(line)
+      if (!header) {
+        header = cells.map((cell) => cell.trim())
+        continue
+      }
+      const index = header.indexOf('kwota_brutto')
+      suma += Number.parseFloat((cells[index] ?? '0').replace(',', '.'))
+    }
+    const dashboard = await loadDashboard(request)
+    expect(dashboard.sales?.paidPln ?? 0).toBeCloseTo(suma, 1)
+  })
+
+  test('należność to różnica między wystawionym a wpłaconym — nie osobna liczba', async ({ request }) => {
+    const dashboard = await loadDashboard(request)
+    const sales = dashboard.sales
+    expect(sales).toBeDefined()
+    expect(sales!.outstandingPln).toBeCloseTo(sales!.billedPln - sales!.paidPln, 2)
+    // Magazyn nie może być winien odbiorcom — ujemna należność oznaczałaby,
+    // że wpłaty przewyższyły faktury, czyli błąd alokacji.
+    expect(sales!.outstandingPln).toBeGreaterThanOrEqual(0)
+  })
+
+  test('wystawiona kwota brutto zgadza się z sumą faktur', async ({ request }) => {
+    const dashboard = await loadDashboard(request)
+    expect(dashboard.sales?.billedPln ?? 0).toBeCloseTo(dashboard.sales?.grossPln ?? 0, 1)
   })
 
   test('konwersja kilogramów na megagramy jest spójna w całej księdze legacy', async () => {

@@ -171,6 +171,23 @@ export async function applySalesOrders(
 
       let invoiced = false
       if (ctx.issueInvoices) {
+        // Kwoty przepisujemy z zamówienia, którego totale policzył
+        // `salesCalculationService` platformy. Powód jest zasadniczy:
+        // `sales.invoices.create` — w przeciwieństwie do `sales.orders.create`
+        // — nie woła silnika wyliczeń, więc pozycje faktury zapisują się
+        // z zerowymi kwotami mimo poprawnej ilości, ceny i stawki VAT.
+        // Sprawdzone na żywej bazie: 40 faktur, każda na 0,00 zł.
+        //
+        // Własne mnożenie ilości przez cenę byłoby drugą, równoległą logiką
+        // podatkową obok platformowej — a dwie takie logiki prędzej czy później
+        // się rozjadą. Dlatego czytamy wynik tamtej.
+        const placed = await ctx.em.findOne(SalesOrder, { id: orderId } as never)
+        const totals = placed as unknown as {
+          grandTotalNetAmount?: string | null
+          grandTotalGrossAmount?: string | null
+        } | null
+        const netTotal = Number.parseFloat(totals?.grandTotalNetAmount ?? '0')
+        const grossTotal = Number.parseFloat(totals?.grandTotalGrossAmount ?? '0')
         // Numer faktury nadaje platforma: własne numerowanie dokumentów
         // sprzedaży to dokładnie ta rzecz, której nie chcemy pisać sami.
         const invoice = (await ctx.commandBus.execute('sales.invoices.create', {
@@ -181,6 +198,8 @@ export async function applySalesOrders(
             currencyCode: CURRENCY_FALLBACK,
             issueDate: toDate(row.dataWydania),
             metadata: { legacy: { orderno: row.orderno, netAmount } },
+            grandTotalNetAmount: netTotal,
+            grandTotalGrossAmount: grossTotal,
             lines: [
               {
                 name: `Frakcja ${row.stockid}`,
@@ -190,6 +209,9 @@ export async function applySalesOrders(
                 currencyCode: CURRENCY_FALLBACK,
                 unitPriceNet: row.cenaKg,
                 taxRate: VAT_RATE,
+                totalNetAmount: netTotal,
+                taxAmount: Number((grossTotal - netTotal).toFixed(4)),
+                totalGrossAmount: grossTotal,
               },
             ],
           },

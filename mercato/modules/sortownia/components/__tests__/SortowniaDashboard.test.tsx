@@ -58,6 +58,11 @@ const payload = {
     invoices: 40,
     netPln: 48250.75,
     grossPln: 59348.42,
+    billedPln: 59348.42,
+    paidPln: 21000,
+    outstandingPln: 38348.42,
+    unpaidDocs: 31,
+    oldestUnpaidDays: 28,
     topBuyers: [
       { nazwa: 'Stora Papier Recykling', netPln: 21340.5, orders: 12 },
       { nazwa: 'PlastMet Sp. z o.o.', netPln: 15002.25, orders: 9 },
@@ -202,10 +207,27 @@ describe('SortowniaDashboard', () => {
     expect(screen.queryByText('Sprzedaż frakcji')).not.toBeInTheDocument()
   })
 
+  it('pokazuje należności, bo to pytanie zadawane w sortowni najczęściej', async () => {
+    render(<SortowniaDashboard />)
+    await screen.findByText('Sprzedaż frakcji')
+    expect(screen.getByText('Do zapłaty')).toBeInTheDocument()
+    expect(screen.getByText('38348 zł')).toBeInTheDocument()
+    expect(screen.getByText('31 dokumentów, najstarszy 28 dni')).toBeInTheDocument()
+  })
+
+  it('mówi, że rozliczone, gdy nic nie wisi', async () => {
+    respondWith({ ...payload, sales: { ...payload.sales, unpaidDocs: 0, outstandingPln: 0, oldestUnpaidDays: null } })
+    render(<SortowniaDashboard />)
+    await screen.findByText('Sprzedaż frakcji')
+    expect(screen.getByText('wszystko rozliczone')).toBeInTheDocument()
+  })
+
   it('pokazuje przepływ frakcji jako wykres', async () => {
     render(<SortowniaDashboard />)
-    const chart = await screen.findByTestId('chart')
-    expect(chart).toHaveAttribute('data-rows', '1')
+    // Wykres istnieje w drzewie od pierwszego renderu, jeszcze pusty, więc samo
+    // `findByTestId` rozwiązuje się przed dojściem danych i asercja łapie zero
+    // wierszy. Czekamy na liczbę wierszy, a nie na obecność elementu.
+    await waitFor(() => expect(screen.getByTestId('chart')).toHaveAttribute('data-rows', '1'))
   })
 
   it('mówi wprost, gdy dane się nie pobrały — pusty ekran niczego nie tłumaczy', async () => {
