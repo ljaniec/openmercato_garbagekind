@@ -221,6 +221,86 @@ const statusCommand: ModuleCli = {
  * pokazania funkcji, która zawsze zwraca „wycofaj". Dopiero potem etap
  * z przekroczonym progiem.
  */
+
+/**
+ * Ustanawia dopuszczenie bezpieczeństwa dla wersji polityki w klasie celi robota.
+ *
+ * Dopisane po fazie 5, która wprowadziła bramę w `deployment.assignments.assign`.
+ * Dowód fazy 4 opiera się na wdrażaniu i wycofywaniu wersji, więc bez tej
+ * preambuły przestał się odtwarzać — brama odbijała pierwsze przypisanie
+ * i dowód kończył się błędem, zamiast pokazywać zachowanie, o którym mówi.
+ *
+ * To jest realny koszt kolejności faz: warstwa bezpieczeństwa dołożona później
+ * unieważnia dowody wcześniejszych faz, które jej nie znały. Naprawa idzie
+ * w dowód, a nie w bramę — brama ma blokować i robi to poprawnie.
+ *
+ * Operacja jest idempotentna: powtórne uruchomienie zastaje uzasadnienie już
+ * zatwierdzone i nie tworzy drugiego.
+ */
+async function zapewnijDopuszczenie(
+  em: EntityManager,
+  bus: CommandBus,
+  ctx: CommandRuntimeContext,
+  scope: Scope,
+  policyVersionId: string,
+  cellClass: string,
+  riskClass: string,
+): Promise<void> {
+  const istnieje = await em.getConnection().execute<Array<{ id: string }>>(
+    `select id from safety_cases
+      where tenant_id = ? and policy_version_id = ? and cell_class = ? and status = 'approved'
+        and (valid_until is null or valid_until > now())
+      limit 1`,
+    [scope.tenantId, policyVersionId, cellClass],
+  )
+
+  if (!istnieje.length) {
+    const draft = (
+      await bus.execute('safety.cases.draft', {
+        input: {
+          ...scope,
+          policyVersionId,
+          cellClass,
+          riskClass,
+          standards: ['ISO 10218-2:2025', 'ISO/TS 15066:2016'],
+          // Warstwa deterministyczna jest warunkiem zatwierdzenia i ma nim
+          // zostać: to ona egzekwuje bezpieczeństwo, nie wyuczona polityka.
+          safetyLayer: 'Bariera prędkości i momentu w sterowniku celi, niezależna od polityki.',
+        },
+        ctx,
+      })
+    ).result as { safetyCaseId: string }
+
+    const rok = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
+    await bus.execute('safety.cases.approve', {
+      input: { ...scope, safetyCaseId: draft.safetyCaseId, approvedBy: scope.organizationId, validUntil: rok },
+      ctx,
+    })
+  }
+
+  // Przebiegi ewaluacyjne dla wszystkich zestawów wymaganych dla tej klasy ryzyka.
+  // Filtrowanie po stronie JS, a nie w SQL: operator jsonb `?` zderza się
+  // ze znakiem zapytania jako placeholderem parametru i sterownik rozkłada
+  // zapytanie na czynniki pierwsze. Ta sama droga, co w `safety/cli.ts`.
+  const wszystkie = await em.getConnection().execute<Array<{ suite_key: string; required_for: string[] | null }>>(
+    `select suite_key, required_for from safety_eval_suites where tenant_id = ?`,
+    [scope.tenantId],
+  )
+  const zestawy = wszystkie.filter((s) => (s.required_for ?? []).includes(riskClass))
+  for (const zestaw of zestawy) {
+    await bus.execute('safety.runs.record', {
+      input: {
+        ...scope,
+        policyVersionId,
+        suiteKey: zestaw.suite_key,
+        result: 'pass',
+        ranAt: new Date(),
+      },
+      ctx,
+    })
+  }
+}
+
 const proveCommand: ModuleCli = {
   command: 'prove',
   async run(rest) {
@@ -260,6 +340,23 @@ const proveCommand: ModuleCli = {
         ctx,
       })
     }
+    /*
+     * Brama bezpieczeństwa z fazy 5 stoi przed każdym przypisaniem. Dowód
+     * fazy 4 mówi o bramie ETAPOWEJ, nie o bezpieczeństwie, więc musi sam
+     * doprowadzić obie wersje do stanu dopuszczonego — inaczej mierzyłby
+     * cudzą odmowę zamiast własnego progu.
+     */
+    const cela = await em.getConnection().execute<Array<{ cell_class: string; risk_class: string }>>(
+      `select c.cell_class, c.risk_class from fleet_robots r
+         join fleet_cells c on c.id = r.cell_id where r.id = ? limit 1`,
+      [pierwszy.id],
+    )
+    if (!cela.length) throw new Error('Robot dowodu nie stoi w celi — uruchom: yarn mercato fleet seed')
+    for (const wersja of [bazowa.id, version.id]) {
+      await zapewnijDopuszczenie(em, bus, ctx, scope, wersja, cela[0].cell_class, cela[0].risk_class)
+    }
+    console.log(`   dopuszczenie dla klasy ${cela[0].cell_class}: ustanowione dla v1 i v2`)
+
     await bus.execute('deployment.assignments.assign', {
       input: {
         ...scope,

@@ -643,6 +643,22 @@ yarn mercato safety status
 
 Ekran: `/backend/safety`, uprawnienie `safety.view`.
 
+#### Koszt kolejności faz
+
+Faza 5 unieważniła dowód fazy 4. Brama bezpieczeństwa stanęła przed każdym
+przypisaniem, a dowód fazy 4 opiera się na wdrażaniu i wycofywaniu wersji —
+odbijał się więc na pierwszym kroku i kończył błędem, zamiast pokazywać
+zachowanie, o którym mówi.
+
+Naprawa poszła w **dowód**, nie w bramę: `rollout prove` sam ustanawia teraz
+uzasadnienie i przebiegi ewaluacyjne dla obu wersji, idempotentnie. Brama
+blokowała poprawnie i nie było powodu jej ruszać.
+
+To jest realna cena układania warstwy bezpieczeństwa po warstwie wdrożeń,
+i warto ją zapisać: każda faza dokładająca warunek wstępny unieważnia dowody
+faz wcześniejszych, które tego warunku nie znały. Przy większej liczbie faz
+przestaje to być pojedynczą poprawką, a staje się kosztem stałym.
+
 ### Dowód fazy 5
 
 Warunek zaliczenia brzmiał: *wersja polityki bez kompletu przejść
