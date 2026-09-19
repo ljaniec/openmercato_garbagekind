@@ -10,5 +10,7 @@
   "fleet.state.maintenance": "Maintenance",
   "fleet.state.quarantined": "Quarantined",
   "fleet.state.decommissioning": "Decommissioning",
-  "fleet.state.decommissioned": "Decommissioned"
+  "fleet.state.decommissioned": "Decommissioned",
+  "fleet.plant.title": "Plant layout",
+  "fleet.plant.subtitle": "Where things stand, in what state, and what came out"
 }

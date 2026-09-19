@@ -1,7 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { z } from 'zod'
 import { registerCommand, type CommandHandler } from '@open-mercato/shared/lib/commands'
-import { Calibration, EmbodimentRevision, Robot, RobotTransition, type RobotState } from '../data/entities'
+import { Calibration, Cell, EmbodimentRevision, Robot, RobotTransition, type RobotState } from '../data/entities'
 import { checkTransition, type TransitionActor } from '../lib/lifecycle'
 import { evaluateCalibration } from '../lib/calibration'
 
@@ -281,3 +281,58 @@ registerCommand(transitionRobotCommand)
 registerCommand(recordCalibrationCommand)
 
 export { registerRobotCommand, transitionRobotCommand, recordCalibrationCommand }
+
+/* ------------------------------------------------------------------ */
+
+export const setCellLayoutSchema = scoped.extend({
+  cellId: z.string().uuid(),
+  /**
+   * Komplet albo nic.
+   *
+   * Schemat wymaga wszystkich czterech wymiarów naraz, bo trzy z czterech
+   * to brak rozmieszczenia, a nie rozmieszczenie częściowe. Dopuszczenie
+   * częściowego zapisu dałoby rekordy, których nie da się narysować ani
+   * uczciwie nazwać nierozmieszczonymi.
+   */
+  x: z.number(),
+  y: z.number(),
+  width: z.number().positive(),
+  height: z.number().positive(),
+  rotationDeg: z.number().min(-360).max(360).optional(),
+})
+
+export type SetCellLayoutInput = z.infer<typeof setCellLayoutSchema>
+
+const setCellLayoutCommand: CommandHandler<SetCellLayoutInput, { cellId: string }> = {
+  id: 'fleet.cells.layout',
+  async execute(rawInput, ctx) {
+    const input = setCellLayoutSchema.parse(rawInput ?? {})
+    const em = resolveEm(ctx)
+
+    const cell = (await em.findOne(Cell, {
+      id: input.cellId,
+      tenantId: input.tenantId,
+      deletedAt: null,
+    } as never)) as unknown as {
+      id: string
+      layoutXM?: number | null
+      layoutYM?: number | null
+      layoutWidthM?: number | null
+      layoutHeightM?: number | null
+      layoutRotationDeg?: number | null
+    } | null
+    if (!cell) throw new Error(`Cela ${input.cellId} nie istnieje.`)
+
+    cell.layoutXM = input.x
+    cell.layoutYM = input.y
+    cell.layoutWidthM = input.width
+    cell.layoutHeightM = input.height
+    cell.layoutRotationDeg = input.rotationDeg ?? null
+    await em.flush()
+
+    return { cellId: cell.id }
+  },
+}
+
+registerCommand(setCellLayoutCommand)
+export { setCellLayoutCommand }

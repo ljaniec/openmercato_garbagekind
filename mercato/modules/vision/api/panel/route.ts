@@ -23,6 +23,8 @@ export const metadata = {
 type BatchRow = {
   containerCode: string
   sku: string
+  /** Po identyfikatorze, bo rzut hali łączy po celi, a nazwy się powtarzają. */
+  cellId: string | null
   cell: string | null
   visionCount: number | null
   claimedCount: number
@@ -84,6 +86,7 @@ export async function GET(req: Request): Promise<Response> {
   const batches = await em.getConnection().execute<Array<{
     container_code: string
     sku: string
+    cell_id: string | null
     cell: string | null
     claimed_pieces: number | null
     weighed_grams: string | null
@@ -92,7 +95,7 @@ export async function GET(req: Request): Promise<Response> {
     windows: string
     counting_modes: string[] | null
   }>>(
-    `select b.container_code, o.sku, fc.name as cell,
+    `select b.container_code, o.sku, o.cell_id, fc.name as cell,
             b.claimed_pieces, b.weighed_grams, o.nominal_piece_grams,
             v.counts, v.windows, v.counting_modes
        from work_orders_batches b
@@ -142,6 +145,7 @@ export async function GET(req: Request): Promise<Response> {
     return {
       containerCode: row.container_code,
       sku: row.sku,
+      cellId: row.cell_id,
       cell: row.cell,
       visionCount,
       claimedCount: Number(row.claimed_pieces ?? 0),

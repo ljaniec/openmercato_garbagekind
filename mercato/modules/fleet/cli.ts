@@ -357,6 +357,60 @@ const statusCommand: ModuleCli = {
  * 3. Powtórne wczytanie tego samego pliku nie tworzy drugiej rewizji —
  *    porównanie idzie po odcisku, nie po nazwie.
  */
+
+/**
+ * Nadanie celom współrzędnych na rzucie hali.
+ *
+ * Demonstracyjne rozstawienie dla istniejących cel, żeby rzut miał co
+ * narysować. W prawdziwym wdrożeniu te liczby biorą się z obmiaru hali albo
+ * z rzutu architektonicznego — i **nie ma sensownej wartości domyślnej**,
+ * dlatego komenda nadaje je jawnie, a cele nietknięte zostają nierozmieszczone
+ * i widać to na ekranie.
+ */
+const layoutCommand: ModuleCli = {
+  command: 'layout',
+  async run(rest) {
+    const args = parseArgs(rest)
+    const container = await createRequestContainer()
+    const em = container.resolve('em') as EntityManager
+    const scope = await resolveScope(em, args)
+    const bus = container.resolve('commandBus') as CommandBus
+    const ctx = buildCommandContext(container, scope)
+
+    // Hala 40 × 24 m — tyle, ile podano przy obiekcie.
+    await em.getConnection().execute(
+      `update fleet_sites set floor_width_m = 40, floor_height_m = 24, updated_at = now()
+        where tenant_id = ? and deleted_at is null and floor_width_m is null`,
+      [scope.tenantId],
+    )
+
+    const rozstawienie: Record<string, { x: number; y: number; width: number; height: number }> = {
+      'CELA-A': { x: 4, y: 4, width: 12, height: 8 },
+      'CELA-P': { x: 24, y: 6, width: 8, height: 6 },
+    }
+
+    const cele = await em.getConnection().execute<Array<{ id: string; code: string; name: string }>>(
+      'select id, code, name from fleet_cells where tenant_id = ? and deleted_at is null order by code',
+      [scope.tenantId],
+    )
+
+    let nadane = 0
+    for (const cela of cele) {
+      const geometria = rozstawienie[cela.code]
+      if (!geometria) {
+        // Świadomie nie zgadujemy. Cela bez obmiaru zostaje nierozmieszczona.
+        console.log(`  ${cela.code.padEnd(10)}pominięta — brak obmiaru, zostaje nierozmieszczona`)
+        continue
+      }
+      await bus.execute('fleet.cells.layout', { input: { ...scope, cellId: cela.id, ...geometria }, ctx })
+      console.log(`  ${cela.code.padEnd(10)}${geometria.width}×${geometria.height} m w punkcie (${geometria.x}, ${geometria.y})`)
+      nadane += 1
+    }
+
+    console.log(`\nRozmieszczono ${nadane} z ${cele.length} cel. Rzut: /backend/plant`)
+  },
+}
+
 const embodimentCommand: ModuleCli = {
   command: 'embodiment',
   async run(rest) {
@@ -437,4 +491,4 @@ const embodimentCommand: ModuleCli = {
   },
 }
 
-export default [seedCommand, statusCommand, embodimentCommand] satisfies ModuleCli[]
+export default [seedCommand, statusCommand, embodimentCommand, layoutCommand] satisfies ModuleCli[]

@@ -58,6 +58,19 @@ export class Site {
   @Property({ type: 'text', nullable: true })
   address?: string | null
 
+  /**
+   * Wymiary hali w metrach — obrys, na którym rysuje się cele.
+   *
+   * Opcjonalne, bo obiekt bez zmierzonej hali jest normalnym stanem wyjścia.
+   * Brak wymiarów znaczy, że rzut składa się z samych obrysów cel, a nie że
+   * hala ma zero metrów.
+   */
+  @Property({ name: 'floor_width_m', type: 'double', nullable: true })
+  floorWidthM?: number | null
+
+  @Property({ name: 'floor_height_m', type: 'double', nullable: true })
+  floorHeightM?: number | null
+
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()
 
@@ -117,6 +130,33 @@ export class Cell {
    */
   @Property({ name: 'risk_class', type: 'text', default: 'fenced' })
   riskClass: 'fenced' | 'shared' | 'public' = 'fenced'
+
+  /**
+   * Położenie i obrys celi w metrach, względem lewego górnego rogu obiektu.
+   *
+   * Wszystkie cztery pola są `null`-owalne i **trzy z czterech to brak, nie
+   * „prawie"**: cela bez kompletu współrzędnych nie jest rysowana na rzucie,
+   * tylko trafia na listę nierozmieszczonych obok niego. Automatyczne
+   * rozstawienie „gdzieś sensownie" dałoby obrazek wyglądający jak plan hali
+   * i nim niebędący — a plan hali czyta się po to, żeby wiedzieć, gdzie iść.
+   *
+   * Obrót w stopniach, zgodnie z ruchem wskazówek zegara, bo oś Y rośnie
+   * w dół (rysujemy w SVG).
+   */
+  @Property({ name: 'layout_x_m', type: 'double', nullable: true })
+  layoutXM?: number | null
+
+  @Property({ name: 'layout_y_m', type: 'double', nullable: true })
+  layoutYM?: number | null
+
+  @Property({ name: 'layout_width_m', type: 'double', nullable: true })
+  layoutWidthM?: number | null
+
+  @Property({ name: 'layout_height_m', type: 'double', nullable: true })
+  layoutHeightM?: number | null
+
+  @Property({ name: 'layout_rotation_deg', type: 'double', nullable: true })
+  layoutRotationDeg?: number | null
 
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()

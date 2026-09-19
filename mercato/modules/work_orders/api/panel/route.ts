@@ -23,6 +23,9 @@ export const metadata = {
 type OrderRow = {
   id: string
   orderNumber: string
+  /** Potrzebne rzutowi hali do zsumowania wyniku per cela — po identyfikatorze,
+   *  nie po nazwie: nazwy się powtarzają i zmieniają. */
+  cellId: string | null
   sku: string
   cell: string | null
   policy: string | null
@@ -67,6 +70,7 @@ export async function GET(req: Request): Promise<Response> {
     sku: string
     status: string
     target_grams: string
+    cell_id: string | null
     cell: string | null
     policy: string | null
     sales_order_number: string | null
@@ -78,7 +82,7 @@ export async function GET(req: Request): Promise<Response> {
     overclaim_batches: string
   }>>(
     `select o.id, o.order_number, o.sku, o.status, o.target_grams,
-            c.name as cell,
+            o.cell_id, c.name as cell,
             case when p.policy_key is null then null
                  else p.policy_key || ' v' || v.version end as policy,
             so.order_number as sales_order_number,
@@ -128,6 +132,7 @@ export async function GET(req: Request): Promise<Response> {
       id: row.id,
       orderNumber: row.order_number,
       sku: row.sku,
+      cellId: row.cell_id,
       cell: row.cell,
       policy: row.policy,
       salesOrderNumber: row.sales_order_number,

@@ -10,5 +10,7 @@
   "fleet.state.maintenance": "Serwis",
   "fleet.state.quarantined": "Kwarantanna",
   "fleet.state.decommissioning": "Wycofywanie",
-  "fleet.state.decommissioned": "Wycofany"
+  "fleet.state.decommissioned": "Wycofany",
+  "fleet.plant.title": "Rzut hali",
+  "fleet.plant.subtitle": "Gdzie co stoi, w jakim jest stanie i co z tego wyszło"
 }
