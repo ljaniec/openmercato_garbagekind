@@ -1,0 +1,15 @@
+{
+  "lastTask": {
+    "source": "skill",
+    "ref": "om-auto-write-spec"
+  },
+  "recentSources": [
+    {
+      "source": "skill",
+      "ref": "om-auto-write-spec"
+    }
+  ],
+  "skillUsage": {
+    "om-auto-write-spec": 1
+  }
+}
