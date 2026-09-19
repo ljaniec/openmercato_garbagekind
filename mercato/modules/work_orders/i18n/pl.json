@@ -1,0 +1,10 @@
+{
+  "work_orders.nav.group": "Produkcja",
+  "work_orders.panel.title": "Panel przedsiębiorstwa",
+  "work_orders.panel.subtitle": "Co hala wyprodukowała, na czyją rzecz i ile robot zgubił po drodze",
+  "work_orders.panel.empty": "Brak zleceń roboczych. Załóż je komendą mercato work_orders open.",
+  "work_orders.verdict.ok": "Zgodne",
+  "work_orders.verdict.overclaim": "Brakuje materiału",
+  "work_orders.verdict.underclaim": "Nadwyżka materiału",
+  "work_orders.verdict.no_reference": "Brak odniesienia"
+}

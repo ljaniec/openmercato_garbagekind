@@ -1,0 +1,10 @@
+{
+  "work_orders.nav.group": "Production",
+  "work_orders.panel.title": "Enterprise panel",
+  "work_orders.panel.subtitle": "What the floor produced, for whom, and how much the robot lost on the way",
+  "work_orders.panel.empty": "No work orders. Create one with mercato work_orders open.",
+  "work_orders.verdict.ok": "Reconciled",
+  "work_orders.verdict.overclaim": "Material missing",
+  "work_orders.verdict.underclaim": "Material surplus",
+  "work_orders.verdict.no_reference": "No reference"
+}
