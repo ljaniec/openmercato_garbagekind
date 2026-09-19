@@ -67,6 +67,23 @@ yarn mercato sortownia import --limit 50
 Import jest **idempotentny**: drugie uruchomienie na tym samym zbiorze raportuje
 same duplikaty i nie dopisuje ani jednego ruchu.
 
+## Pulpit sortowni
+
+Ekran `/backend/sortownia` (grupa „Sortownia" w nawigacji, uprawnienie
+`sortownia.view`) pokazuje to, czego stary system nie umiał powiedzieć:
+
+* cztery kafelki: masa na placu przyjęć, masa w boksach, wysortowane i wydane
+  w ostatnich 30 dniach,
+* przepływ każdej frakcji przez zakład (przyjęte / wysortowane / wydane),
+* listę lokalizacji z **zapełnieniem względem pojemności** — pasek robi się
+  pomarańczowy od 70% i czerwony od 90%,
+* frakcje z progiem wysyłki i ostrzeżeniem, gdy stan zejdzie poniżej,
+* ostatnie ruchy z numerem z systemu legacy, po którym da się wrócić do kwitu;
+  para `SORT` pokazuje oba numery obok siebie (`#100240 + 100241`).
+
+Dane liczone są wprost z encji WMS przez `api/dashboard/route.ts`, więc pulpit
+i magazyn zawsze mówią to samo. Pulpit odświeża się co 30 sekund.
+
 ## Panel Data Sync
 
 `integration.ts` rejestruje system legacy jako konektor w hubie Data Sync, a
@@ -87,6 +104,9 @@ Zweryfikowane uruchomieniem na żywej instancji (Postgres + Redis + `apps/mercat
 * WMS sam wystawił powiadomienia `wms.inventory.low_stock` dla frakcji poniżej
   progu — czyli reguła, której stary system nie miał gdzie zapisać.
 
-Nie zrobione jeszcze: dedykowany pulpit sortowni (ekran backendu) i uruchamianie
-importu z panelu Data Sync end‑to‑end (adapter jest zarejestrowany, ale przebieg
-odpalaliśmy komendą CLI).
+Pulpit sprawdzony w przeglądarce (zalogowanie, render, zrzut ekranu): kafelki,
+wykres przepływu, zapełnienie boksów i księga ruchów zasilają się z żywej bazy.
+
+Nie zrobione jeszcze: uruchamianie importu z panelu Data Sync end‑to‑end
+(adapter jest zarejestrowany i waliduje połączenie, ale przebiegi odpalaliśmy
+komendą CLI — brakuje utworzenia rekordu integracji z poziomu panelu).
