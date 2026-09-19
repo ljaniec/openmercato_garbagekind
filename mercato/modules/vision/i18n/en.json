@@ -1,0 +1,14 @@
+{
+  "vision.nav.group": "Production",
+  "vision.panel.title": "Machine vision",
+  "vision.panel.subtitle": "What the camera counted, and how it compares to the robot and the scale",
+  "vision.panel.empty": "No cameras. Register them with mercato vision prove.",
+  "vision.suspect.none": "Agreed",
+  "vision.suspect.nominal_mass": "Nominal mass",
+  "vision.suspect.grip_to_bin": "Lost between grip and bin",
+  "vision.suspect.under_reporting": "Under-reported",
+  "vision.suspect.vision": "Camera cannot see it",
+  "vision.suspect.foreign_material": "Foreign material",
+  "vision.suspect.inconclusive": "Inconclusive",
+  "vision.suspect.no_reference": "No reference"
+}

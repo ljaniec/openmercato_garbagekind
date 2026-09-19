@@ -1,0 +1,374 @@
+import type { EntityManager } from '@mikro-orm/postgresql'
+import { z } from 'zod'
+import { registerCommand, type CommandHandler } from '@open-mercato/shared/lib/commands'
+import { Camera, Clip, DetectionWindow, DetectorVersion } from '../data/entities'
+import { checkCamera, checkClassVocabulary, deleteAfterFor, LAWFUL_PURPOSES, MAX_RETENTION_DAYS } from '../lib/lawful'
+
+/**
+ * Komendy wzroku maszynowego.
+ *
+ * Dwie z nich (`cameras.register`, `detectors.register`) są w istocie bramkami
+ * prawnymi: sprawdzają to, czego żaden przegląd kodu po fakcie nie wyłapie,
+ * i **odmawiają zapisu**, zamiast ostrzegać. Ostrzeżenie, które da się kliknąć,
+ * jest ostrzeżeniem, które zostanie kliknięte.
+ */
+
+const scoped = z.object({
+  organizationId: z.string().uuid(),
+  tenantId: z.string().uuid(),
+})
+
+function resolveEm(ctx: { container: { resolve: (key: string) => unknown } }): EntityManager {
+  return (ctx.container.resolve('em') as EntityManager).fork()
+}
+
+/* ------------------------------------------------------------------ */
+
+export const registerCameraSchema = scoped.extend({
+  cellId: z.string().uuid(),
+  code: z.string().trim().min(1).max(64),
+  name: z.string().trim().min(1).max(191),
+  viewRole: z.string().trim().min(1).max(64),
+  purpose: z.enum(LAWFUL_PURPOSES),
+  /*
+   * Górna granica egzekwowana już w schemacie, z powodem prawnym w komunikacie.
+   * Surowy zrzut walidatora („Too big: expected number to be <=90") mówi
+   * operatorowi, że coś odpadło, i nie mówi, dlaczego ani czego się trzymać.
+   */
+  retentionDays: z
+    .number()
+    .int()
+    .min(1, 'Okres przechowywania musi być dodatni.')
+    .max(
+      MAX_RETENTION_DAYS,
+      `Okres przechowywania nie może przekroczyć ${MAX_RETENTION_DAYS} dni — art. 22² § 3 Kodeksu pracy nakazuje ` +
+        'zniszczenie nagrań po trzech miesiącach. Dłużej wolno wyłącznie nagraniu stanowiącemu dowód w postępowaniu.',
+    ),
+  peopleInView: z.boolean().default(true),
+  workforceNotifiedAt: z.coerce.date().nullable().optional(),
+  areaMarkedAt: z.coerce.date().nullable().optional(),
+  resolution: z.string().trim().max(32).optional(),
+  framesPerSecond: z.number().int().positive().max(240).optional(),
+})
+
+export type RegisterCameraInput = z.infer<typeof registerCameraSchema>
+
+const registerCameraCommand: CommandHandler<
+  RegisterCameraInput,
+  { cameraId: string; warnings: string[] }
+> = {
+  id: 'vision.cameras.register',
+  async execute(rawInput, ctx) {
+    const input = registerCameraSchema.parse(rawInput ?? {})
+
+    const verdict = checkCamera({
+      purpose: input.purpose,
+      retentionDays: input.retentionDays,
+      peopleInView: input.peopleInView,
+      workforceNotifiedAt: input.workforceNotifiedAt ?? null,
+      areaMarkedAt: input.areaMarkedAt ?? null,
+    })
+    if (!verdict.lawful) {
+      throw new Error(`Kamery nie da się zarejestrować: ${verdict.problems.join(' ')}`)
+    }
+
+    const em = resolveEm(ctx)
+    const istnieje = await em.findOne(Camera, { tenantId: input.tenantId, code: input.code } as never)
+    if (istnieje) throw new Error(`Kamera o kodzie ${input.code} już istnieje.`)
+
+    const camera = em.create(Camera, {
+      organizationId: input.organizationId,
+      tenantId: input.tenantId,
+      cellId: input.cellId,
+      code: input.code,
+      name: input.name,
+      viewRole: input.viewRole,
+      purpose: input.purpose,
+      retentionDays: input.retentionDays,
+      peopleInView: input.peopleInView,
+      workforceNotifiedAt: input.workforceNotifiedAt ?? null,
+      areaMarkedAt: input.areaMarkedAt ?? null,
+      resolution: input.resolution ?? null,
+      framesPerSecond: input.framesPerSecond ?? null,
+    } as never)
+    em.persist(camera)
+    await em.flush()
+
+    /*
+     * Ostrzeżenia wracają do wołającego, a nie znikają w logu. Brak
+     * poinformowania załogi jest wadą usuwalną — ale tylko wtedy, gdy ktoś
+     * się o niej dowie przed uruchomieniem kamery.
+     */
+    return { cameraId: (camera as unknown as { id: string }).id, warnings: verdict.warnings }
+  },
+}
+
+/* ------------------------------------------------------------------ */
+
+export const registerDetectorSchema = scoped.extend({
+  detectorKey: z.string().trim().min(1).max(120),
+  revision: z.number().int().positive(),
+  name: z.string().trim().min(1).max(191),
+  weightsDigest: z.string().trim().regex(/^[0-9a-f]{64}$/, 'Skrót wag musi być sha256 w hex (64 znaki).'),
+  classVocabulary: z.array(z.string().trim().min(1)).min(1),
+  confidenceThreshold: z.number().min(0).max(1),
+  inputResolution: z.string().trim().max(32).optional(),
+})
+
+export type RegisterDetectorInput = z.infer<typeof registerDetectorSchema>
+
+const registerDetectorCommand: CommandHandler<
+  RegisterDetectorInput,
+  { detectorVersionId: string; presenceOnly: string[] }
+> = {
+  id: 'vision.detectors.register',
+  async execute(rawInput, ctx) {
+    const input = registerDetectorSchema.parse(rawInput ?? {})
+
+    // Bramka z art. 5 rozporządzenia 2024/1689. Odmowa, nie ostrzeżenie.
+    const verdict = checkClassVocabulary(input.classVocabulary)
+    if (!verdict.allowed) throw new Error(verdict.reason)
+
+    if (input.confidenceThreshold <= 0) {
+      /*
+       * Próg zero znaczy „licz wszystko, czego model dotknął". Taka liczba
+       * nie jest pomiarem obiektów, tylko pomiarem czułości modelu — i wchodzi
+       * potem do triangulacji jako pełnoprawny świadek.
+       */
+      throw new Error('Próg ufności równy zeru nie daje zliczeń obiektów, tylko zliczenia hipotez detektora.')
+    }
+
+    const em = resolveEm(ctx)
+    const istnieje = (await em.findOne(DetectorVersion, {
+      tenantId: input.tenantId,
+      detectorKey: input.detectorKey,
+      revision: input.revision,
+    } as never)) as unknown as { id: string; weightsDigest: string } | null
+
+    if (istnieje) {
+      if (istnieje.weightsDigest === input.weightsDigest) {
+        return { detectorVersionId: istnieje.id, presenceOnly: verdict.presenceOnly }
+      }
+      // Rewizja jest niezmienna — te same powody, co przy rewizji embodimentu:
+      // zliczenia z przeszłości wiążą się z tym numerem.
+      throw new Error(
+        `Rewizja ${input.detectorKey} r${input.revision} istnieje z innymi wagami. Podnieś numer rewizji.`,
+      )
+    }
+
+    const detector = em.create(DetectorVersion, {
+      organizationId: input.organizationId,
+      tenantId: input.tenantId,
+      detectorKey: input.detectorKey,
+      revision: input.revision,
+      name: input.name,
+      weightsDigest: input.weightsDigest,
+      classVocabulary: input.classVocabulary,
+      confidenceThreshold: input.confidenceThreshold,
+      inputResolution: input.inputResolution ?? null,
+    } as never)
+    em.persist(detector)
+    await em.flush()
+
+    return { detectorVersionId: (detector as unknown as { id: string }).id, presenceOnly: verdict.presenceOnly }
+  },
+}
+
+/* ------------------------------------------------------------------ */
+
+export const recordWindowSchema = scoped.extend({
+  cameraId: z.string().uuid(),
+  detectorVersionId: z.string().uuid(),
+  startedAt: z.coerce.date(),
+  endedAt: z.coerce.date(),
+  framesAnalyzed: z.number().int().nonnegative(),
+  countingMode: z.enum(['tracks', 'detections']),
+  counts: z.record(z.string(), z.number().int().nonnegative()),
+  meanConfidence: z.record(z.string(), z.number().min(0).max(1)).optional(),
+})
+
+export type RecordWindowInput = z.infer<typeof recordWindowSchema>
+
+const recordWindowCommand: CommandHandler<RecordWindowInput, { windowId: string; action: 'created' | 'skipped' }> = {
+  id: 'vision.windows.record',
+  async execute(rawInput, ctx) {
+    const input = recordWindowSchema.parse(rawInput ?? {})
+    if (input.endedAt.getTime() <= input.startedAt.getTime()) {
+      throw new Error('Koniec okna musi być późniejszy niż jego początek.')
+    }
+
+    const em = resolveEm(ctx)
+    const camera = (await em.findOne(Camera, {
+      id: input.cameraId,
+      tenantId: input.tenantId,
+      deletedAt: null,
+    } as never)) as unknown as { id: string; cellId: string; organizationId: string } | null
+    if (!camera) throw new Error('Kamera nie istnieje.')
+
+    const detector = (await em.findOne(DetectorVersion, {
+      id: input.detectorVersionId,
+      tenantId: input.tenantId,
+    } as never)) as unknown as { id: string; classVocabulary: string[] } | null
+    if (!detector) throw new Error('Wersja detektora nie istnieje.')
+
+    /*
+     * Klasy spoza zadeklarowanego słownika są odrzucane. Zliczenie klasy,
+     * której detektor według rejestru nie potrafi zwrócić, znaczy, że
+     * na brzegu działa co innego, niż tu zapisano — a wtedy próg ufności
+     * i skrót wag w rejestrze nie opisują niczego.
+     */
+    const obce = Object.keys(input.counts).filter((klasa) => !detector.classVocabulary.includes(klasa))
+    if (obce.length) {
+      throw new Error(
+        `Zliczenia zawierają klasy spoza słownika detektora: ${obce.join(', ')}. ` +
+          'Na brzegu działa inny model, niż zapisano w rejestrze.',
+      )
+    }
+
+    const istnieje = (await em.findOne(DetectionWindow, {
+      cameraId: input.cameraId,
+      startedAt: input.startedAt,
+      detectorVersionId: input.detectorVersionId,
+    } as never)) as unknown as { id: string } | null
+    // Idempotencja po (kamera, początek okna, detektor): ponowne przysłanie
+    // tego samego okna przy powtórce łącza nie ma podwajać zliczeń.
+    if (istnieje) return { windowId: istnieje.id, action: 'skipped' }
+
+    const window = em.create(DetectionWindow, {
+      organizationId: camera.organizationId,
+      tenantId: input.tenantId,
+      cameraId: input.cameraId,
+      cellId: camera.cellId,
+      detectorVersionId: input.detectorVersionId,
+      startedAt: input.startedAt,
+      endedAt: input.endedAt,
+      framesAnalyzed: input.framesAnalyzed,
+      countingMode: input.countingMode,
+      counts: input.counts,
+      meanConfidence: input.meanConfidence ?? null,
+    } as never)
+    em.persist(window)
+    await em.flush()
+
+    return { windowId: (window as unknown as { id: string }).id, action: 'created' }
+  },
+}
+
+/* ------------------------------------------------------------------ */
+
+export const attachClipSchema = scoped.extend({
+  cameraId: z.string().uuid(),
+  subjectType: z.string().trim().min(1).max(64),
+  subjectId: z.string().uuid().nullable().optional(),
+  uri: z.string().trim().min(1).max(1000),
+  recordedAt: z.coerce.date(),
+  durationSeconds: z.number().int().positive().max(3600),
+})
+
+export type AttachClipInput = z.infer<typeof attachClipSchema>
+
+const attachClipCommand: CommandHandler<AttachClipInput, { clipId: string; deleteAfter: Date }> = {
+  id: 'vision.clips.attach',
+  async execute(rawInput, ctx) {
+    const input = attachClipSchema.parse(rawInput ?? {})
+    const em = resolveEm(ctx)
+
+    const camera = (await em.findOne(Camera, {
+      id: input.cameraId,
+      tenantId: input.tenantId,
+      deletedAt: null,
+    } as never)) as unknown as { id: string; organizationId: string; retentionDays: number } | null
+    if (!camera) throw new Error('Kamera nie istnieje.')
+
+    /*
+     * Termin usunięcia **liczony z kamery**, nigdy przyjmowany od wołającego.
+     * Gdyby wchodził wejściem, byłby pierwszym polem, które ktoś ustawi na
+     * rok — i art. 22² § 3 KP przestałby cokolwiek znaczyć.
+     */
+    const deleteAfter = deleteAfterFor(input.recordedAt, camera.retentionDays)
+
+    const clip = em.create(Clip, {
+      organizationId: camera.organizationId,
+      tenantId: input.tenantId,
+      cameraId: input.cameraId,
+      subjectType: input.subjectType,
+      subjectId: input.subjectId ?? null,
+      uri: input.uri,
+      recordedAt: input.recordedAt,
+      durationSeconds: input.durationSeconds,
+      deleteAfter,
+    } as never)
+    em.persist(clip)
+    await em.flush()
+
+    return { clipId: (clip as unknown as { id: string }).id, deleteAfter }
+  },
+}
+
+/* ------------------------------------------------------------------ */
+
+export const purgeClipsSchema = scoped.partial().extend({ tenantId: z.string().uuid() })
+export type PurgeClipsInput = z.infer<typeof purgeClipsSchema>
+
+const purgeClipsCommand: CommandHandler<
+  PurgeClipsInput,
+  { purged: Array<{ clipId: string; uri: string }>; heldBack: number }
+> = {
+  id: 'vision.clips.purge',
+  async execute(rawInput, ctx) {
+    const input = purgeClipsSchema.parse(rawInput ?? {})
+    const em = resolveEm(ctx)
+    const now = new Date()
+
+    const przeterminowane = (await em.find(Clip, {
+      tenantId: input.tenantId,
+      purgedAt: null,
+    } as never)) as unknown as Array<{
+      id: string
+      uri: string
+      deleteAfter: Date
+      purgedAt?: Date | null
+      legalHoldReference?: string | null
+    }>
+
+    const purged: Array<{ clipId: string; uri: string }> = []
+    let heldBack = 0
+
+    for (const clip of przeterminowane) {
+      if (clip.deleteAfter.getTime() > now.getTime()) continue
+      if (clip.legalHoldReference) {
+        // Jedyny wyjątek przewidziany w ustawie — i wymaga sygnatury,
+        // a nie samego zaznaczenia pola.
+        heldBack += 1
+        continue
+      }
+      clip.purgedAt = now
+      purged.push({ clipId: clip.id, uri: clip.uri })
+    }
+    await em.flush()
+
+    /**
+     * Zwracamy adresy do skasowania, **nie kasujemy plików**.
+     *
+     * Bajty leżą w magazynie obiektów, do którego ta platforma nie ma i nie
+     * powinna mieć dostępu — inaczej ERP stałby się systemem, który potrafi
+     * nieodwracalnie usunąć materiał dowodowy. Wpis w bazie mówi „ten plik
+     * ma zniknąć"; kasuje ten, kto go trzyma.
+     */
+    return { purged, heldBack }
+  },
+}
+
+registerCommand(registerCameraCommand)
+registerCommand(registerDetectorCommand)
+registerCommand(recordWindowCommand)
+registerCommand(attachClipCommand)
+registerCommand(purgeClipsCommand)
+
+export {
+  registerCameraCommand,
+  registerDetectorCommand,
+  recordWindowCommand,
+  attachClipCommand,
+  purgeClipsCommand,
+}

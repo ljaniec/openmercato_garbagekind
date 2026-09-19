@@ -1,0 +1,14 @@
+{
+  "vision.nav.group": "Produkcja",
+  "vision.panel.title": "Wzrok maszynowy",
+  "vision.panel.subtitle": "Co kamera policzyła, jak to się ma do robota i do wagi",
+  "vision.panel.empty": "Brak kamer. Zarejestruj je komendą mercato vision prove.",
+  "vision.suspect.none": "Zgodne",
+  "vision.suspect.nominal_mass": "Masa nominalna",
+  "vision.suspect.grip_to_bin": "Ubytek w drodze do pojemnika",
+  "vision.suspect.under_reporting": "Zaniżone zgłoszenia",
+  "vision.suspect.vision": "Kamera nie widzi",
+  "vision.suspect.foreign_material": "Obcy materiał",
+  "vision.suspect.inconclusive": "Nierozstrzygnięte",
+  "vision.suspect.no_reference": "Brak odniesienia"
+}
