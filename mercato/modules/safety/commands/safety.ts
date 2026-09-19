@@ -141,6 +141,7 @@ const draftCaseCommand: CommandHandler<CaseDraftInput, { safetyCaseId: string }>
       hazards?: unknown
       standards?: unknown
       safetyLayer?: string | null
+      safetyLayerKind?: string | null
       approvedBy?: string | null
       approvedAt?: Date | null
       validUntil?: Date | null
