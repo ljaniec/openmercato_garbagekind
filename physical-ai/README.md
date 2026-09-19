@@ -39,3 +39,30 @@ ustalona metoda wykazania zgodności.
 
 Bezpieczeństwo egzekwuje osobna, deterministyczna, certyfikowalna warstwa.
 Platforma ma to wymuszać i dokumentować.
+
+## Rozstrzygnięcia przed fazą 0
+
+| Pytanie | Decyzja | Konsekwencja w kodzie |
+| --- | --- | --- |
+| Struktura własności | właściciel + integrator | `owner_organization_id` i `operator_organization_id` rozdzielone w `fleet_robots` od pierwszej migracji |
+| Klasa robotów | manipulatory stacjonarne | epizod jest naturalnym atomem; ryzyko R1 nie dotyczy tego wdrożenia |
+| Opóźnienie halt-to-stop | sekundy, cele ogrodzone | halt może iść z centrali przez bramy; `risk_class = fenced` daje dzierżawę w dniach |
+
+## Stan implementacji
+
+**Faza 0 — moduł `fleet`** (w `mercato/modules/fleet`): rejestr robotów, klas
+sprzętowych, obiektów, cel i kalibracji. Sześć tabel, trzy komendy, strona
+backendu, dwie komendy CLI, 47 testów jednostkowych.
+
+Uruchomienie:
+
+```bash
+./mercato/install.sh fleet
+cd /sciezka/do/open-mercato/apps/mercato
+yarn generate && yarn mercato db migrate
+yarn mercato auth sync-role-acls   # nadaje uprawnienia fleet.* rolom
+yarn mercato fleet seed            # flota demonstracyjna
+yarn mercato fleet status          # rejestr kontra hala
+```
+
+Ekran: `/backend/fleet`, uprawnienie `fleet.view`.

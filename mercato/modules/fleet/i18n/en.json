@@ -1,0 +1,14 @@
+{
+  "fleet.nav.group": "Fleet",
+  "fleet.robots.title": "Robots",
+  "fleet.robots.subtitle": "Fleet registry: what exists, where it stands and whether it may work",
+  "fleet.robots.empty": "The registry is empty. Import a fleet with mercato fleet seed.",
+  "fleet.state.registered": "Registered",
+  "fleet.state.commissioning": "Commissioning",
+  "fleet.state.ready": "Ready",
+  "fleet.state.operational": "Operational",
+  "fleet.state.maintenance": "Maintenance",
+  "fleet.state.quarantined": "Quarantined",
+  "fleet.state.decommissioning": "Decommissioning",
+  "fleet.state.decommissioned": "Decommissioned"
+}

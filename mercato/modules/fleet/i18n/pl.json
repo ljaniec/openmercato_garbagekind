@@ -1,0 +1,14 @@
+{
+  "fleet.nav.group": "Flota",
+  "fleet.robots.title": "Roboty",
+  "fleet.robots.subtitle": "Rejestr floty: co istnieje, gdzie stoi i czy wolno mu pracować",
+  "fleet.robots.empty": "Rejestr jest pusty. Zaimportuj flotę komendą mercato fleet seed.",
+  "fleet.state.registered": "Zarejestrowany",
+  "fleet.state.commissioning": "Uruchamianie",
+  "fleet.state.ready": "Gotowy",
+  "fleet.state.operational": "W ruchu",
+  "fleet.state.maintenance": "Serwis",
+  "fleet.state.quarantined": "Kwarantanna",
+  "fleet.state.decommissioning": "Wycofywanie",
+  "fleet.state.decommissioned": "Wycofany"
+}
