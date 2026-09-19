@@ -14,3 +14,9 @@ export const features = [
   { id: 'fleet.calibrate', title: 'Rejestrowanie kalibracji', module: 'fleet' },
   { id: 'fleet.decommission', title: 'Wycofywanie robotów', module: 'fleet' },
 ]
+
+/**
+ * Rejestr modułów sięga po `default`, tak samo jak przy `setup.ts`.
+ * Sam nazwany eksport przechodzi bez błędu i bez skutku.
+ */
+export default features

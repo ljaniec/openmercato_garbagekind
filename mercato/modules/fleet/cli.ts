@@ -2,7 +2,7 @@ import type { ModuleCli } from '@open-mercato/shared/modules/registry'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { CommandBus, CommandRuntimeContext } from '@open-mercato/shared/lib/commands'
-import { Cell, EmbodimentRevision, Robot, Site } from './data/entities'
+import { Cell, EmbodimentRevision, Robot, Site, type RobotState } from './data/entities'
 import { evaluateRobotCalibration } from './commands/robots'
 import { isActive } from './lib/lifecycle'
 
@@ -290,7 +290,7 @@ const statusCommand: ModuleCli = {
       id: string
       serialNumber: string
       name: string
-      state: string
+      state: RobotState
       stateReason: string | null
       embodimentRevisionId: string
       ownerOrganizationId: string

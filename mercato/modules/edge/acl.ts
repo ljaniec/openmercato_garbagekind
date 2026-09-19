@@ -11,3 +11,9 @@ export const features = [
   { id: 'edge.rotate', title: 'Rotacja kluczy agentów', module: 'edge' },
   { id: 'edge.revoke', title: 'Odwoływanie agentów', module: 'edge' },
 ]
+
+/**
+ * Rejestr modułów sięga po `default`, tak samo jak przy `setup.ts`.
+ * Sam nazwany eksport przechodzi bez błędu i bez skutku.
+ */
+export default features
