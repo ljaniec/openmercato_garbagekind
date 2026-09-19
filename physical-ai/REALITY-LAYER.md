@@ -69,7 +69,46 @@ Na gałęzi `reality-layer-physical-ai`:
 Sam grant nie przełącza intentu na `AUTHORIZED`. To zrobi dopiero M2 Reality
 Gate po niezależnym sprawdzeniu wszystkich warunków.
 
-## Następny krok — M2
+## M2 — Reality Gate
+
+Na gałęzi `reality-layer-m2` działa deterministyczna brama przed dispatch:
+
+```text
+business_precondition
+AND executor_capability
+AND executor_credential
+AND authorization_grant
+AND deterministic_policy
+```
+
+Każdy warunek zwraca `pass`, `block` albo `unknown`. Tylko pięć `pass` daje
+`AUTHORIZED`; `unknown` jest fail-closed i daje `BLOCKED`.
+
+Dwa backendy wykonawcy są rozpoznawane już na tym etapie:
+
+- `mock:<id>` — samodzielna ścieżka referencyjna bez zależności od modułów robotycznych;
+- `robot:<uuid>` — odczytuje bieżące fakty z `fleet`, `edge`, `deployment` i `safety` bez importowania ich encji ORM.
+
+Dla WMS gate potrafi sprawdzić bieżące `quantity_available`, a nie tylko
+`quantity_on_hand`. Dla prawdziwego robota wymaga ważnego klucza Edge,
+heartbeat w oknie `online`, aktywnego deploymentu w stanie `running` i
+ponownego przejścia `safety.clearance.check`.
+
+Najważniejsza własność czasowa: `AUTHORIZED` nie jest przywilejem na zawsze.
+Ponowna ewaluacja przed dispatch może cofnąć intent do `BLOCKED`, jeśli grant
+wygasł lub został odwołany, robot stracił łączność, stan magazynu się zmienił,
+deployment został zatrzymany albo Safety przestało dopuszczać politykę.
+
+Komenda M2:
+
+```text
+reality_layer.gate.evaluate
+```
+
+zapisuje pełny wektor werdyktów w `latestGateJson`, wybranego executora i
+przejście stanu. Nie uruchamia sprzętu — dispatch pozostaje zadaniem M3.
+
+## Następny krok — M3
 
 Reality Gate ma połączyć pięć niezależnych werdyktów:
 
