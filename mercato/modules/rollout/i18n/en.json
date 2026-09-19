@@ -1,0 +1,19 @@
+{
+  "rollout.nav.group": "Physical AI",
+  "rollout.rollouts.title": "Staged rollouts",
+  "rollout.rollouts.subtitle": "Stages gated on episode-ledger numbers with automatic rollback",
+  "rollout.rollouts.empty": "No rollouts planned.",
+  "rollout.status.planned": "Planned",
+  "rollout.status.running": "Running",
+  "rollout.status.halted": "Halted",
+  "rollout.status.completed": "Completed",
+  "rollout.status.rolled_back": "Rolled back",
+  "rollout.stage.pending": "Pending",
+  "rollout.stage.running": "Running",
+  "rollout.stage.passed": "Passed",
+  "rollout.stage.halted": "Halted",
+  "rollout.stage.rolled_back": "Rolled back",
+  "rollout.decision.advance": "Advance",
+  "rollout.decision.hold": "Hold",
+  "rollout.decision.rollback": "Roll back"
+}

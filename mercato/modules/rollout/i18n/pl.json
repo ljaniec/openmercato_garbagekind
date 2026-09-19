@@ -1,0 +1,19 @@
+{
+  "rollout.nav.group": "Physical AI",
+  "rollout.rollouts.title": "Wdrożenia etapowe",
+  "rollout.rollouts.subtitle": "Etapy z bramą liczoną z księgi epizodów i automatycznym wycofaniem",
+  "rollout.rollouts.empty": "Brak zaplanowanych wdrożeń.",
+  "rollout.status.planned": "Zaplanowane",
+  "rollout.status.running": "W biegu",
+  "rollout.status.halted": "Wstrzymane",
+  "rollout.status.completed": "Zakończone",
+  "rollout.status.rolled_back": "Wycofane",
+  "rollout.stage.pending": "Oczekuje",
+  "rollout.stage.running": "W biegu",
+  "rollout.stage.passed": "Zaliczony",
+  "rollout.stage.halted": "Zatrzymany",
+  "rollout.stage.rolled_back": "Wycofany",
+  "rollout.decision.advance": "Przepuść",
+  "rollout.decision.hold": "Wstrzymaj",
+  "rollout.decision.rollback": "Wycofaj"
+}

@@ -481,3 +481,118 @@ Dwa, oba niewidoczne w 35 testach:
 
 To jest dokładnie ten krok, o którym mowa w regule projektu: zielona suita nie
 jest warunkiem zaliczenia.
+
+---
+
+**Faza 4 — moduł `rollout`** (w `mercato/modules/rollout`): wdrożenia etapowe
+z bramą. Cztery tabele, trzy komendy, endpoint panelu, strona backendu, dwie
+komendy CLI, 34 testy jednostkowe.
+
+Brama odwołuje się do liczb z księgi epizodów, nie do opinii. **Nie ma
+uprawnienia „pomiń bramę" i nie będzie** — człowiek może zatrzymać wdrożenie
+w każdej chwili, ale nie może go przepchnąć obok liczb. To jedyne, co odróżnia
+wdrożenie etapowe od wdrożenia na raz z dodatkowym spotkaniem.
+
+| Decyzja | Odrzucona alternatywa | Dlaczego |
+| --- | --- | --- |
+| Wycofanie jest domyślną reakcją na przekroczenie progu | wstrzymanie do wyjaśnienia | wycofanie jest tańsze niż diagnoza; odwrotna kolejność zostawia maszyny na podejrzanej polityce na czas dochodzenia |
+| Za mało danych → `hold`, nie `advance` | traktowanie braku interwencji jako sukcesu | zero interwencji na trzech epizodach nie jest lepszym wynikiem niż dwie na dwustu |
+| Jedna interwencja ciężka wycofuje przed kompletem danych | czekanie na próg liczebności | `estop` nie jest wskaźnikiem jakości, tylko zdarzeniem; czekanie na pięćdziesiąty epizod po pierwszym zatrzymaniu awaryjnym to statystyka zamiast decyzji |
+| Osobny próg na interwencje ciężkie | jeden próg na wszystkie przerwania | wdrożenie z samymi poprawkami otoczenia i wdrożenie z samymi `estop` mają identyczny udział interwencji i nie są tym samym wdrożeniem |
+| Osobny próg skuteczności | sam próg interwencji | polityka, która nie robi nic złego i nic dobrego, też ma zostać wycofana |
+| Progi na **etapie**, nie na wdrożeniu | jeden próg dla całości | zmuszałby do ustawienia go pod etap ostatni, czyli do przepuszczenia wszystkiego wcześniej |
+| Poprzednia wersja zapisywana przy **planowaniu** | odtwarzanie jej przy wycofaniu | wycofanie dzieje się, gdy coś się pali, i nie może zależeć od zapytania, które akurat wtedy zwróci co innego |
+| Robot bez wcześniejszej polityki wraca do „bez polityki" | podstawienie dowolnej innej wersji | wdrożenie wykonane w panice jest dokładnie tym, czemu wycofanie ma zapobiegać |
+| Wycofanie idzie komendą `deployment.assignments.assign` | zapis do tabeli wdrożeń | inaczej stan pożądany w hali rozjeżdża się ze stanem wdrożenia w panelu |
+| Zatrzymywane są **wszystkie** etapy następne | tylko kolejny | wdrożenie pięcioetapowe, w którym po wycofaniu etapu 1 rusza etap 3, jest wdrożeniem jednoetapowym z opóźnieniem |
+| Robot, którego nie da się objąć etapem, jest pomijany | przerwanie startu etapu | maszyna w serwisie to normalny stan floty; wdrożenie wywracające się na pierwszym takim robocie nie ruszy nigdy — pominięcia lądują w wyniku komendy |
+| Ten sam robot nie może być w dwóch etapach | brak kontroli | wycofanie etapu 1 zdjęłoby politykę maszynie zbierającej dane dla etapu 3, a brama etapu 3 orzekałaby o populacji, której nie ma |
+| Ograniczenie trybu cieniowego zapisane jako funkcja `shadowProves` | akapit w dokumentacji | cień nie dowodzi bezpieczeństwa polityki zmieniającej stan świata; kto chce pominąć etap czynny, ma to jawnie obejść i zostawić ślad |
+| Dziennik bramy dopisywany, ze zmierzonymi wartościami | jedno pole „ostatni werdykt" | nadpisywanie kasuje odpowiedź na pytanie, ile razy wdrożenie ocierało się o próg, zanim go przekroczyło — a to jedyna rzecz, którą widać zawczasu |
+
+Uruchomienie:
+
+```bash
+./mercato/install.sh rollout
+cd /sciezka/do/open-mercato/apps/mercato
+yarn generate && yarn mercato db migrate
+yarn mercato auth sync-role-acls
+yarn mercato rollout prove     # dowód fazy
+yarn mercato rollout status
+```
+
+Ekran: `/backend/rollout`, uprawnienie `rollout.view`.
+
+### Dowód fazy 4
+
+Warunek zaliczenia brzmiał: *przekroczenie progu interwencji na etapie 1
+zatrzymuje etap 2 i wycofuje etap 1 bez udziału człowieka.* Dowód ma dwie
+części, bo jedna nie wystarcza: sam przypadek negatywny dowodziłby tylko tego,
+że da się napisać funkcję zawsze zwracającą „wycofaj".
+
+```
+DOWÓD FAZY 4 — brama etapowa odwołuje się do liczb, nie do opinii
+
+   przed wdrożeniem: UR10E-0001 → pick-bin-ur10e v1
+   progi etapu: ep ≥ 20, interwencje ≤ 10%, ciężkie ≤ 2%, skuteczność ≥ 80%
+
+A) wdrożenie, które przekracza próg interwencji
+   etap 1 uruchomiony; UR10E-0001 → pick-bin-ur10e v2
+   etap 1: 24 epizodów, 6 interwencji
+   brama etapu 1: rollback — próg przekroczony — interwencje 25.0% > 10.0%; skuteczność 75.0% < 80.0%
+   zatrzymanych etapów następnych: 1; wycofanych robotów: 1
+   po wycofaniu: UR10E-0001 → pick-bin-ur10e v1 (przed wdrożeniem miał pick-bin-ur10e v1)
+   etap 2 odrzucony: Etap jest w stanie halted, a nie oczekującym.
+
+B) wdrożenie, które przechodzi bramę
+   etap 1: 25 epizodów, 0 interwencji
+   brama etapu 1: advance — 25 epizodów, interwencje 0.0%, skuteczność 100.0% — w granicach
+   etap 2 uruchomiony
+
+C) dziennik bramy — kto zdecydował
+   rollback  automat
+   advance   automat
+```
+
+Punkt C jest tym, który odpowiada na „bez udziału człowieka": kolumna sprawcy
+w dzienniku bramy jest pusta przy obu wpisach. Podpis człowieka w tej kolumnie
+znaczyłby, że automat nie zdążył — i to też jest informacja, dlatego kolumna
+istnieje.
+
+Epizody w dowodzie idą **komendą księgi**, a nie INSERT-em: brama ma czytać
+dokładnie to, co czyta raport kadencji z fazy 3. Gdyby dowód wpisywał wiersze
+z pominięciem komendy, dowodziłby zgodności bramy z tym INSERT-em.
+
+Ścieżka sieciowa, konto `employee` (`rollout.view`, bez `rollout.plan`):
+
+```
+GET /api/rollout/rollouts  →  200
+totals: {"rollouts": 6, "running": 3, "rolledBack": 3, "completed": 0}
+Dowód 4B — czyste liczby | pick-bin-ur10e v2 | running
+   1. Etap 1 — jeden robot  status=passed  roboty=1 (wycofanych 0)
+      brama: advance  ep=25 int=0.0% skut=100.0%  automat=True
+   2. Etap 2 — reszta celi  status=running  roboty=1 (wycofanych 0)
+Dowód 4A — próg przekroczony | pick-bin-ur10e v2 | rolled_back
+      | próg przekroczony — interwencje 25.0% > 10.0%; skuteczność 75.0% < 80.0%
+   1. Etap 1 — jeden robot  status=rolled_back  roboty=1 (wycofanych 1)
+      brama: rollback  ep=24 int=25.0% skut=75.0%  automat=True
+   2. Etap 2 — reszta celi  status=halted  roboty=1 (wycofanych 0)
+```
+
+#### Dwa błędy znalezione przy odtwarzaniu dowodu
+
+- **We własnym generatorze danych, nie w bramie.** Pierwsze przejście pokazało
+  12,5% interwencji zamiast 25%. Epizody były rozstawione co sekundę, więc
+  epizody wcześniejszego etapu wpadały w okno czasowe etapu następnego
+  i rozcieńczały dokładnie ten sygnał, który brama ma wyłapać. Gdyby zostało,
+  dowód mówiłby co innego, niż twierdzi.
+- **W kolejności samego dowodu.** Przy wariancie udanym przed nieudanym robot
+  miał już wersję docelową i wycofanie sprowadzało się do przypisania mu tego,
+  co i tak ma — widać było werdykt, a nie skutek. Wariant nieudany idzie teraz
+  pierwszy, a dowód jawnie ustawia punkt wyjścia.
+- **W atrapie testu, nie w kodzie.** Zapytanie bramy zawiera
+  `rollout_stage_members` w podzapytaniu populacji i było łapane przez
+  wcześniejszą gałąź atrapy, przez co brama dostawała listę składu etapu
+  zamiast statystyk i każdy werdykt wychodził `hold`. Cztery testy były
+  czerwone z powodu atrapy, nie implementacji — i naprawa poszła w atrapę,
+  bez rozluźniania asercji.
