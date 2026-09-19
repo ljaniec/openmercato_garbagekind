@@ -9,7 +9,7 @@ robotyczną.
 | `claude/quirky-hypatia-1afn6m` | serwer XML-RPC w dialekcie webERP + klient CSV | zamknięta |
 | `legacy_erp` | generator danych legacy, saldo magazynu liczone z księgi | zamknięta |
 | `mercato_erp` | moduł `sortownia`: pełna ścieżka ERP na Open Mercato | zamknięta |
-| **`physical_ai`** | osiem modułów robotycznych + kafelek embodimentu | **bieżąca** |
+| **`physical_ai`** | osiem modułów robotycznych + Reality Layer + kafelek embodimentu | **bieżąca** |
 
 ## Mapa tej gałęzi
 
@@ -22,7 +22,8 @@ robotyczną.
 | [`physical-ai/VISION.md`](physical-ai/VISION.md) | wzrok maszynowy jako **trzeci świadek** — i granice prawne monitoringu egzekwowane w kodzie |
 | [`physical-ai/COMPUTE.md`](physical-ai/COMPUTE.md) | gdzie postawić DGX Sparka, a gdzie go **nie** stawiać — i co z tego wynikło w kodzie |
 | [`physical-ai/PLANT-VIEW.md`](physical-ai/PLANT-VIEW.md) | rzut hali: rozmieszczenie, status i wynik — oraz dlaczego brak obmiaru nie jest zgadywany |
-| `mercato/modules/` | dziewięć modułów Open Mercato (`sortownia` + osiem robotycznych) |
+| [`physical-ai/REALITY-LAYER.md`](physical-ai/REALITY-LAYER.md) | semantyczna granica ERP ↔ wykonanie fizyczne: intent, autoryzacja, evidence i reconciliation |
+| `mercato/modules/` | dziesięć modułów Open Mercato (`sortownia` + osiem robotycznych + `reality_layer`) |
 | `mercato/embodiments/` | opisy ramion; `so101_follower.json` z dokumentacji LeRobot |
 | `legacy/`, `client/`, `webui/` | system legacy z etapów wcześniejszych — opisany niżej |
 
