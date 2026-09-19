@@ -75,6 +75,7 @@ const draftInput = {
   cellClass: 'fenced-pick-place',
   riskClass: 'fenced' as const,
   safetyLayer: 'Kurtyna świetlna kat. 3 PL d.',
+  safetyLayerKind: 'light_curtain' as const,
 }
 
 describe('safety.cases.draft', () => {
@@ -108,6 +109,7 @@ describe('safety.cases.approve', () => {
       id: CASE_ID,
       status: 'draft',
       safetyLayer: 'Kurtyna świetlna kat. 3 PL d.',
+      safetyLayerKind: 'light_curtain',
       declaredAsSafetyFunction: false,
     }
     const { ctx } = makeCtx({ existingCase: target })
@@ -133,6 +135,30 @@ describe('safety.cases.approve', () => {
     await expect(approveCaseCommand.execute(approveInput, ctx)).rejects.toThrow(/Annex I część A/)
   })
 
+  it('ODMAWIA ZATWIERDZENIA BEZ RODZAJU WARSTWY — sam opis nie wystarcza', async () => {
+    /*
+     * Dołożone, gdy do systemu wszedł mocny węzeł obliczeniowy. Wolny tekst
+     * przyjmuje zdanie „warstwą bezpieczeństwa jest model nadzorczy na
+     * akceleratorze", które brzmi poważnie i nie jest warstwą bezpieczeństwa.
+     * Słownik zamknięty odbiera tę możliwość na poziomie typu.
+     */
+    const { ctx } = makeCtx({
+      existingCase: {
+        id: CASE_ID,
+        status: 'draft',
+        safetyLayer: 'Model nadzorczy na węźle obliczeniowym pilnuje, żeby nic się nie stało.',
+        safetyLayerKind: null,
+        declaredAsSafetyFunction: false,
+      },
+    })
+    await expect(
+      approveCaseCommand.execute(
+        { ...scope, safetyCaseId: CASE_ID, approvedBy: scope.organizationId, validUntil: rok },
+        ctx,
+      ),
+    ).rejects.toThrow(/safetyLayerKind/)
+  })
+
   it('odmawia uzasadnieniu bez wskazanej warstwy deterministycznej', async () => {
     // Dokument, który nie mówi, CO zatrzyma maszynę, gdy polityka zawiedzie,
     // jest opisem nadziei.
@@ -144,7 +170,7 @@ describe('safety.cases.approve', () => {
 
   it('odmawia daty ważności w przeszłości', async () => {
     const { ctx } = makeCtx({
-      existingCase: { id: CASE_ID, status: 'draft', safetyLayer: 'x', declaredAsSafetyFunction: false },
+      existingCase: { id: CASE_ID, status: 'draft', safetyLayer: 'x', safetyLayerKind: 'safety_plc', declaredAsSafetyFunction: false },
     })
     await expect(
       approveCaseCommand.execute({ ...approveInput, validUntil: new Date(Date.now() - 1000) }, ctx),
@@ -153,7 +179,7 @@ describe('safety.cases.approve', () => {
 
   it('odmawia zatwierdzenia uzasadnienia już zatwierdzonego', async () => {
     const { ctx } = makeCtx({
-      existingCase: { id: CASE_ID, status: 'approved', safetyLayer: 'x', declaredAsSafetyFunction: false },
+      existingCase: { id: CASE_ID, status: 'approved', safetyLayer: 'x', safetyLayerKind: 'safety_plc', declaredAsSafetyFunction: false },
     })
     await expect(approveCaseCommand.execute(approveInput, ctx)).rejects.toThrow(/wersję roboczą/)
   })

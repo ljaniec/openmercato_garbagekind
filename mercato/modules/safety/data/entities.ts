@@ -79,6 +79,21 @@ export class SafetyCase {
   @Property({ name: 'safety_layer', type: 'text', nullable: true })
   safetyLayer?: string | null
 
+  /**
+   * Rodzaj deterministycznej warstwy bezpieczeństwa — ze słownika zamkniętego.
+   *
+   * Dołożone, gdy do systemu wszedł mocny węzeł obliczeniowy. Do tej pory
+   * `safetyLayer` był wolnym tekstem sprawdzanym wyłącznie na niepustość,
+   * więc dało się tam wpisać „model na DGX Sparku" i uzasadnienie przechodziło.
+   *
+   * Słownik zamknięty odbiera tę możliwość na poziomie typu: wszystkie
+   * dopuszczone pozycje są mechanizmami deterministycznymi, niezależnymi od
+   * polityki i od tego, co akurat liczy akcelerator. Wyuczonego modelu nie da
+   * się w tym polu **wyrazić** — a to jest mocniejsze niż odmowa po sprawdzeniu.
+   */
+  @Property({ name: 'safety_layer_kind', type: 'text', nullable: true })
+  safetyLayerKind?: string | null
+
   @Property({ name: 'approved_by', type: 'uuid', nullable: true })
   approvedBy?: string | null
 

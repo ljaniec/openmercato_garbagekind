@@ -27,6 +27,25 @@ const scoped = z.object({
 const riskClasses = ['fenced', 'shared', 'public'] as const
 const harms = ['none', 'near_miss', 'first_aid', 'lost_time', 'serious'] as const
 
+/**
+ * Deterministyczne mechanizmy zatrzymania — słownik zamknięty.
+ *
+ * Każda pozycja działa bez udziału wyuczonego modelu i bez zależności od tego,
+ * co robi polityka. Czego tu celowo nie ma: cokolwiek realizowanego przez
+ * sieć neuronową, przez współdzieloną maszynę obliczeniową albo przez usługę
+ * po sieci. Nie jest to lista preferencji — to jest granica, poza którą
+ * uzasadnienia nie da się zapisać.
+ */
+const SAFETY_LAYER_KINDS = [
+  'hardware_estop',
+  'safety_plc',
+  'safety_rated_torque_limit',
+  'safety_rated_speed_limit',
+  'light_curtain',
+  'fence_interlock',
+  'dual_channel_relay',
+] as const
+
 export const caseDraftSchema = scoped.extend({
   policyVersionId: z.string().uuid(),
   cellClass: z.string().trim().min(1).max(120),
@@ -34,6 +53,8 @@ export const caseDraftSchema = scoped.extend({
   hazards: z.array(z.record(z.string(), z.unknown())).optional(),
   standards: z.array(z.string().trim().min(1).max(191)).optional(),
   safetyLayer: z.string().trim().max(2000).optional(),
+  /** Rodzaj mechanizmu; opis w `safetyLayer` zostaje, ale sam nie wystarcza. */
+  safetyLayerKind: z.enum(SAFETY_LAYER_KINDS).optional(),
   /**
    * Deklaracja polityki jako funkcji bezpieczeństwa.
    *
@@ -149,6 +170,7 @@ const draftCaseCommand: CommandHandler<CaseDraftInput, { safetyCaseId: string }>
       existing.hazards = input.hazards ?? null
       existing.standards = input.standards ?? null
       existing.safetyLayer = input.safetyLayer ?? null
+      existing.safetyLayerKind = input.safetyLayerKind ?? null
       existing.approvedBy = null
       existing.approvedAt = null
       existing.validUntil = null
@@ -168,6 +190,7 @@ const draftCaseCommand: CommandHandler<CaseDraftInput, { safetyCaseId: string }>
       hazards: input.hazards ?? null,
       standards: input.standards ?? null,
       safetyLayer: input.safetyLayer ?? null,
+      safetyLayerKind: input.safetyLayerKind ?? null,
     } as never)
 
     em.persist(safetyCase)
@@ -193,6 +216,7 @@ const approveCaseCommand: CommandHandler<CaseApproveInput, { safetyCaseId: strin
       id: string
       status: SafetyCaseStatus
       safetyLayer?: string | null
+      safetyLayerKind?: string | null
       declaredAsSafetyFunction: boolean
       approvedBy?: string | null
       approvedAt?: Date | null
@@ -222,6 +246,20 @@ const approveCaseCommand: CommandHandler<CaseApproveInput, { safetyCaseId: strin
       // Uzasadnienie, które nie mówi, CO zatrzyma maszynę, gdy polityka
       // zawiedzie, nie jest uzasadnieniem — jest opisem nadziei.
       throw new Error('Uzasadnienie nie wskazuje deterministycznej warstwy bezpieczeństwa (pole safetyLayer).')
+    }
+
+    if (!safetyCase.safetyLayerKind) {
+      /*
+       * Sam opis nie wystarcza i nie wystarczał nigdy — tyle że do tej pory
+       * nie było tego jak sprawdzić. Wolny tekst przyjmuje zdanie „warstwą
+       * bezpieczeństwa jest model nadzorczy na węźle obliczeniowym", które
+       * brzmi poważnie i nie jest warstwą bezpieczeństwa.
+       */
+      throw new Error(
+        'Uzasadnienie nie podaje rodzaju warstwy bezpieczeństwa (pole safetyLayerKind). ' +
+          `Dopuszczone mechanizmy deterministyczne: ${SAFETY_LAYER_KINDS.join(', ')}. ` +
+          'Wyuczony model ani węzeł obliczeniowy ogólnego przeznaczenia nie są żadnym z nich.',
+      )
     }
 
     safetyCase.status = 'approved'

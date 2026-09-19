@@ -283,6 +283,7 @@ const proveCommand: ModuleCli = {
           cellClass: robot.cell_class,
           riskClass: robot.risk_class,
           standards: ['EU 2023/1230', 'ISO 10218-1:2025', 'ISO 10218-2:2025', 'ISO/TS 15066:2016'],
+          safetyLayerKind: 'safety_rated_speed_limit',
           safetyLayer:
             'Kurtyna świetlna kat. 3 PL d + nadzorowane ograniczenie prędkości w sterowniku bezpieczeństwa; polityka nie uczestniczy w łańcuchu bezpieczeństwa.',
           hazards: [{ id: 'H1', opis: 'Zgniecenie przy chwycie', srodek: 'ograniczenie siły w sterowniku' }],
@@ -341,6 +342,7 @@ const proveCommand: ModuleCli = {
           policyVersionId: version.id,
           cellClass: klasaTestowa,
           riskClass: robot.risk_class,
+          safetyLayerKind: 'safety_rated_torque_limit',
           safetyLayer: 'Polityka sama pilnuje limitów siły.',
           declaredAsSafetyFunction: true,
         },

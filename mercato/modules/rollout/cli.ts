@@ -265,6 +265,8 @@ async function zapewnijDopuszczenie(
           standards: ['ISO 10218-2:2025', 'ISO/TS 15066:2016'],
           // Warstwa deterministyczna jest warunkiem zatwierdzenia i ma nim
           // zostać: to ona egzekwuje bezpieczeństwo, nie wyuczona polityka.
+          // Rodzaj ze słownika zamkniętego — sam opis nie wystarcza do zatwierdzenia.
+          safetyLayerKind: 'safety_rated_speed_limit',
           safetyLayer: 'Bariera prędkości i momentu w sterowniku celi, niezależna od polityki.',
         },
         ctx,

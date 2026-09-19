@@ -20,6 +20,7 @@ robotyczną.
 | [`physical-ai/EMBODIMENTS.md`](physical-ai/EMBODIMENTS.md) | format opisu ramienia, SO-101 jako wzorzec i **cztery usterki, które ujawnił** |
 | [`physical-ai/ERP-BRIDGE.md`](physical-ai/ERP-BRIDGE.md) | most hala ↔ ERP: waga rozstrzyga o zapasie, deklaracja robota o ocenie robota |
 | [`physical-ai/VISION.md`](physical-ai/VISION.md) | wzrok maszynowy jako **trzeci świadek** — i granice prawne monitoringu egzekwowane w kodzie |
+| [`physical-ai/COMPUTE.md`](physical-ai/COMPUTE.md) | gdzie postawić DGX Sparka, a gdzie go **nie** stawiać — i co z tego wynikło w kodzie |
 | `mercato/modules/` | dziewięć modułów Open Mercato (`sortownia` + osiem robotycznych) |
 | `mercato/embodiments/` | opisy ramion; `so101_follower.json` z dokumentacji LeRobot |
 | `legacy/`, `client/`, `webui/` | system legacy z etapów wcześniejszych — opisany niżej |
