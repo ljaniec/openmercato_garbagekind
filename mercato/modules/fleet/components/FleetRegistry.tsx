@@ -29,6 +29,31 @@ type Robot = {
   calibrationDaysLeft: number | null
 }
 
+/**
+ * Stan łączności przychodzi z osobnego modułu (`edge`) i osobnym zapytaniem.
+ *
+ * Składanie dzieje się tutaj, w przeglądarce, a nie po stronie serwera —
+ * dzięki czemu `fleet` nie wie nic o agencie, a rejestr działa również wtedy,
+ * gdy kanału brzegowego nie ma wcale (świeże wdrożenie, flota spisana ręcznie).
+ * Brak odpowiedzi z `/api/edge/agents` nie jest tu błędem, tylko brakiem
+ * kolumny — i tak jest to napisane niżej.
+ */
+type LinkState = 'online' | 'late' | 'lost' | 'never_seen'
+
+type AgentLink = {
+  robotId: string
+  state: LinkState
+  status: 'enrolled' | 'revoked'
+  silenceSeconds: number | null
+  sessionsLastDay: number
+  reason: string
+}
+
+type EdgePayload = {
+  totals: { agents: number; online: number; late: number; lost: number; neverSeen: number }
+  byRobot: Record<string, AgentLink>
+}
+
 type Payload = {
   generatedAt: string
   totals: {
@@ -73,6 +98,27 @@ function formatMoment(value: string | null): string {
   })
 }
 
+/**
+ * Opis łączności.
+ *
+ * `null` znaczy „nie wiemy", a nie „nie działa" — i te dwie rzeczy nie mogą
+ * wyglądać tak samo, bo pierwsza jest normalnym stanem floty bez agentów,
+ * a druga jest awarią.
+ */
+function describeLink(link: AgentLink | undefined): { text: string; tone: string } | null {
+  if (!link) return null
+  if (link.status === 'revoked') return { text: 'agent odwołany', tone: 'text-muted-foreground' }
+  if (link.state === 'never_seen') return { text: 'agent wpisany, nigdy się nie odezwał', tone: 'text-amber-600' }
+  if (link.state === 'lost') return { text: `bez łączności od ${link.silenceSeconds} s`, tone: 'text-red-600' }
+  if (link.state === 'late') return { text: `spóźniony ${link.silenceSeconds} s`, tone: 'text-amber-600' }
+  // Migotanie łącza i stabilna łączność wyglądają w „ostatnio widziany"
+  // identycznie — liczba sesji na dobę jest jedyną rzeczą, która je rozdziela.
+  if (link.sessionsLastDay > 3) {
+    return { text: `łączność, ale ${link.sessionsLastDay} sesji/dobę`, tone: 'text-amber-600' }
+  }
+  return { text: 'łączność', tone: 'text-emerald-600' }
+}
+
 function describeCalibration(robot: Robot): { text: string; tone: string } {
   if (robot.calibrationState === 'blocked') {
     return { text: 'kalibracja nieważna', tone: 'text-red-600' }
@@ -88,6 +134,7 @@ function describeCalibration(robot: Robot): { text: string; tone: string } {
 
 export default function FleetRegistry() {
   const [data, setData] = React.useState<Payload | null>(null)
+  const [edge, setEdge] = React.useState<EdgePayload | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
 
@@ -101,6 +148,16 @@ export default function FleetRegistry() {
       }
       setData((await response.json()) as Payload)
       setError(null)
+
+      // Kanał brzegowy jest opcjonalny: 404 znaczy „moduł nie zainstalowany",
+      // 403 „brak uprawnienia edge.view". Ani jedno, ani drugie nie jest
+      // powodem, żeby rejestr floty przestał się wyświetlać.
+      try {
+        const link = await apiFetch('/api/edge/agents')
+        setEdge(link.ok ? ((await link.json()) as EdgePayload) : null)
+      } catch {
+        setEdge(null)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -123,7 +180,7 @@ export default function FleetRegistry() {
         <div className="rounded-md border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm">{error}</div>
       ) : null}
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <KpiCard
           title="Roboty w rejestrze"
           value={totals?.robots ?? null}
@@ -149,6 +206,18 @@ export default function FleetRegistry() {
           footer={
             <span className="text-xs text-muted-foreground">
               niedopuszczone — bywają mechanicznie sprawne
+            </span>
+          }
+        />
+        <KpiCard
+          title="Bez łączności"
+          value={edge ? edge.totals.lost + edge.totals.late : null}
+          loading={loading}
+          footer={
+            <span className="text-xs text-muted-foreground">
+              {edge
+                ? `${edge.totals.online} z ${edge.totals.agents} agentów się odzywa`
+                : 'kanał brzegowy niedostępny'}
             </span>
           }
         />
@@ -183,6 +252,7 @@ export default function FleetRegistry() {
           <div className="divide-y">
             {robots.map((robot) => {
               const calibration = describeCalibration(robot)
+              const link = describeLink(edge?.byRobot?.[robot.id])
               return (
                 <div key={robot.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3">
                   <div className="min-w-0 flex-1">
@@ -216,6 +286,7 @@ export default function FleetRegistry() {
 
                   <div className="w-56 text-right">
                     <div className={`text-xs ${calibration.tone}`}>{calibration.text}</div>
+                    {link ? <div className={`text-xs ${link.tone}`}>{link.text}</div> : null}
                     <div className="text-xs text-muted-foreground">
                       od {formatMoment(robot.stateChangedAt)}
                     </div>

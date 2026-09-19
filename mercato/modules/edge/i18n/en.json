@@ -1,0 +1,10 @@
+{
+  "edge.nav.group": "Fleet",
+  "edge.agents.title": "Agent connectivity",
+  "edge.agents.subtitle": "Who is reporting in, what proves it and when they last spoke",
+  "edge.agents.empty": "No agent is enrolled. Issue a token with mercato edge issue.",
+  "edge.state.online": "Connected",
+  "edge.state.late": "Late",
+  "edge.state.lost": "Lost",
+  "edge.state.never_seen": "Never seen"
+}

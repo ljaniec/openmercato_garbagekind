@@ -1,0 +1,10 @@
+{
+  "edge.nav.group": "Flota",
+  "edge.agents.title": "Łączność agentów",
+  "edge.agents.subtitle": "Kto się odzywa, czym to udowadnia i kiedy odezwał się ostatnio",
+  "edge.agents.empty": "Żaden agent nie jest wpisany. Wystaw bilet komendą mercato edge issue.",
+  "edge.state.online": "Łączność",
+  "edge.state.late": "Spóźniony",
+  "edge.state.lost": "Utracony",
+  "edge.state.never_seen": "Nigdy się nie odezwał"
+}
