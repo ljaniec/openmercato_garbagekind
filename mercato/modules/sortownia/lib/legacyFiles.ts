@@ -141,7 +141,9 @@ export async function readFractions(filePath: string): Promise<LegacyFractionRow
     if (!row.stockid) continue
     out.push({
       stockid: row.stockid,
-      nazwa: row.nazwa ?? row.stockid,
+      // Pusta komórka to nie brak kolumny: `??` przepuściłby '' i katalog
+      // dostałby pozycję bez nazwy, a `title` produktu jest wymagane.
+      nazwa: row.nazwa?.trim() ? row.nazwa.trim() : row.stockid,
       kategoria: row.kategoria ?? '',
       jednostka: row.jednostka ?? 'kg',
       koszt: toNumber(row.koszt),

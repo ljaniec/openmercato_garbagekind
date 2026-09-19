@@ -92,6 +92,44 @@ i magazyn zawsze mówią to samo. Pulpit odświeża się co 30 sekund.
 numerze ruchu i parametrem „przebieg próbny". Dzięki temu synchronizacja ma
 kolejkę, wznawianie, historię przebiegów i pasek postępu — zamiast crona i CSV.
 
+## Testy
+
+Moduł korzysta z narzędzi, które Open Mercato ma na pokładzie: Jest do testów
+jednostkowych i Playwright do integracyjnych (`__integration__/`, odkrywane
+przez `OM_INTEGRATION_MODULES`). Nic własnego nie dokładamy.
+
+Testy jednostkowe — 98 przypadków, 8 zestawów, bez bazy i bez sieci:
+
+```bash
+cd apps/mercato
+yarn test --testPathPatterns "modules/sortownia"
+```
+
+Obejmują klienta XML-RPC (ramka żądania, ciastko sesji, kody 0/3/4/−1/−2,
+`<fault>`), czytnik plików (BOM, cudzysłowy, polski przecinek dziesiętny,
+determinizm `legacyUuid`), topologię, frakcje, parowanie `SORT`, mapowanie na
+komendy WMS, trasę pulpitu i sam komponent pulpitu (jsdom + Testing Library).
+
+Cross-walidacja z legacy — porównuje odpowiedź pulpitu z księgą `out/ruchy.csv`:
+
+```bash
+# wymaga działającego stacku (Postgres, Redis, apps/mercato) i zrzutu legacy
+OM_INTEGRATION_MODULES=sortownia BASE_URL=http://localhost:3000 \
+  npx playwright test --config .ai/qa/tests/playwright.config.ts
+```
+
+Obie strony liczą z tej samej księgi, ale inaczej: legacy trzyma płaskie
+wiersze w kilogramach, Mercato prowadzi salda w WMS i zwija parę `SORT` w jeden
+`transfer`. Test sprawdza salda per lokalizacja i per frakcja, liczbę ruchów
+(`reszta + pary/2`), podział plac/boksy, brak ujemnych stanów, zapełnienie
+względem pojemności i to, że każdy ruch niesie numer ze starego systemu.
+Jeżeli mapowanie gdzieś się przekłamie — zgubiony znak, zgubiona para, pomylona
+jednostka — salda się rozjadą i ten test to pokaże.
+
+Strona legacy ma własny zestaw (`python3 tests/test_end_to_end.py`, 11 testów),
+który pilnuje m.in. tego, że stan nigdy nie schodzi poniżej zera i że
+powierzchnia XML-RPC nie zawiera metod, których webERP nie ma.
+
 ## Stan na dziś
 
 Zweryfikowane uruchomieniem na żywej instancji (Postgres + Redis + `apps/mercato`):
@@ -106,6 +144,9 @@ Zweryfikowane uruchomieniem na żywej instancji (Postgres + Redis + `apps/mercat
 
 Pulpit sprawdzony w przeglądarce (zalogowanie, render, zrzut ekranu): kafelki,
 wykres przepływu, zapełnienie boksów i księga ruchów zasilają się z żywej bazy.
+
+Testy: 98 jednostkowych i 11 po stronie legacy przechodzi, cross-walidacja
+(8 przypadków Playwright) przechodzi na żywym stacku bez ponowień.
 
 Nie zrobione jeszcze: uruchamianie importu z panelu Data Sync end‑to‑end
 (adapter jest zarejestrowany i waliduje połączenie, ale przebiegi odpalaliśmy

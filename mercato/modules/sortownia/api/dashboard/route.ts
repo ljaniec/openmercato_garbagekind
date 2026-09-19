@@ -1,5 +1,5 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
-import { getAuthFromCookies } from '@open-mercato/shared/lib/auth/server'
+import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { resolveActiveOrganizationId } from '@open-mercato/shared/lib/auth/organizationScope'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 
@@ -51,8 +51,11 @@ function unauthorized(): Response {
   })
 }
 
-export async function GET(): Promise<Response> {
-  const auth = await getAuthFromCookies()
+// `getAuthFromRequest`, nie wariant „z ciastek": poza przeglądarką po pulpit
+// sięgają też skrypty i testy integracyjne, które niosą sesję w nagłówku
+// `Authorization: Bearer`. Wariant ciastkowy odprawiłby je z 401.
+export async function GET(req: Request): Promise<Response> {
+  const auth = await getAuthFromRequest(req)
   if (!auth) return unauthorized()
 
   const organizationId = await resolveActiveOrganizationId(auth)

@@ -109,7 +109,13 @@ type MovementCursor = { lastMoveNo: number }
 export function parseMovementCursor(value: string | null | undefined): MovementCursor {
   if (!value) return { lastMoveNo: 0 }
   try {
-    const parsed = JSON.parse(value) as Partial<MovementCursor>
+    const parsed = JSON.parse(value) as Partial<MovementCursor> | number
+    // Goły numer jest poprawnym JSON-em, więc nie wpadłby do `catch`:
+    // starszy przebieg zapisywał kursor właśnie tak, a odczytany jako 0
+    // kazałby importowi przejść całą księgę od nowa.
+    if (typeof parsed === 'number') {
+      return { lastMoveNo: Number.isFinite(parsed) ? parsed : 0 }
+    }
     const last = Number(parsed?.lastMoveNo)
     return { lastMoveNo: Number.isFinite(last) ? last : 0 }
   } catch {
