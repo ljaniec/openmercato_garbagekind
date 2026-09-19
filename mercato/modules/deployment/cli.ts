@@ -166,6 +166,79 @@ async function ensurePublicCell(em: EntityManager, scope: Scope): Promise<{ id: 
   return rows[0]
 }
 
+/**
+ * Przypisanie polityki robotowi z wiersza poleceń.
+ *
+ * Istnieje, bo bez niego jedyną drogą do stanu pożądanego jest dowód fazy,
+ * a dowód ma pokazywać zachowanie, nie być narzędziem administracyjnym.
+ * Komenda nie omija żadnej bramki — idzie tą samą szyną, co panel.
+ */
+const assignCliCommand: ModuleCli = {
+  command: 'assign',
+  async run(rest) {
+    const args = parseArgs(rest)
+    const serial = typeof args.robot === 'string' ? args.robot : ''
+    const policyKey = typeof args.policy === 'string' ? args.policy : ''
+    if (!serial || !policyKey) {
+      throw new Error('Podaj: --robot <numer seryjny> --policy <klucz polityki> [--version <n>]')
+    }
+
+    const container = await createRequestContainer()
+    const em = container.resolve('em') as EntityManager
+    const bus = container.resolve('commandBus') as CommandBus
+    const scope = await resolveScope(em, args)
+    const ctx = buildCommandContext(container, scope)
+
+    const robot = await findRobot(em, scope.tenantId, serial)
+
+    const wanted = args.version ? Number(args.version) : null
+    const versions = await em.getConnection().execute<Array<{ id: string; version: number; status: string }>>(
+      `select v.id, v.version, v.status
+         from policy_registry_policy_versions v
+         join policy_registry_policies p on p.id = v.policy_id
+        where v.tenant_id = ? and p.policy_key = ?
+          and (? is null or v.version = ?::int)
+        order by v.version desc limit 1`,
+      [scope.tenantId, policyKey, wanted, wanted],
+    )
+    if (!versions?.length) throw new Error(`Nie znaleziono wersji polityki ${policyKey}.`)
+    const version = versions[0]
+
+    if (version.status !== 'released') {
+      // Wypuszczenie jest osobną decyzją i osobnym uprawnieniem; tutaj mówimy
+      // o tym wprost zamiast robić to po cichu w tle przypisania.
+      if (!args.release) {
+        throw new Error(
+          `Wersja ${policyKey} v${version.version} ma status ${version.status}. Dodaj --release, żeby ją wypuścić przed przypisaniem.`,
+        )
+      }
+      await bus.execute('policy_registry.versions.transition', {
+        input: { ...scope, policyVersionId: version.id, toStatus: 'released', reason: `Wypuszczenie przed przypisaniem do ${serial}` },
+        ctx,
+      })
+      console.log(`Wypuszczono ${policyKey} v${version.version}`)
+    }
+
+    const result = (
+      await bus.execute('deployment.assignments.assign', {
+        input: {
+          ...scope,
+          robotId: robot.id,
+          policyVersionId: version.id,
+          reason: typeof args.reason === 'string' ? args.reason : `Przypisanie z CLI do ${serial}`,
+          allowNonOperational: Boolean(args.force),
+        },
+        ctx,
+      })
+    ).result as { assignmentId: string; riskClass: string; leaseSeconds: number; supersededId: string | null }
+
+    console.log(
+      `${serial} ← ${policyKey} v${version.version}; cela ${result.riskClass}, dzierżawa ${result.leaseSeconds} s` +
+        (result.supersededId ? ' (poprzednie przypisanie w historii)' : ''),
+    )
+  },
+}
+
 const statusCommand: ModuleCli = {
   command: 'status',
   async run(rest) {
@@ -431,4 +504,4 @@ const leasesCommand: ModuleCli = {
   },
 }
 
-export default [statusCommand, proveCommand, leasesCommand] satisfies ModuleCli[]
+export default [assignCliCommand, statusCommand, proveCommand, leasesCommand] satisfies ModuleCli[]

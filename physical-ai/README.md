@@ -347,3 +347,137 @@ zrzutem przed wstawieniem. To ta sama klasa pułapki, co czytanie `id` przed
 `flush()`: kod wygląda poprawnie i wywala się dopiero na bazie. Testy
 jednostkowe tego nie złapały i złapać nie mogły — atrapa `EntityManager`
 nie ma indeksów.
+
+---
+
+**Faza 3 — moduł `episodes`** (w `mercato/modules/episodes`): księga epizodów
+i interwencji. Dwie tabele, trzy komendy, endpoint panelu, strona backendu,
+cztery komendy CLI, 35 testów jednostkowych.
+
+Epizod jest atomem pracy manipulatora stacjonarnego. **Interwencja człowieka
+jest osobnym obiektem pierwszorzędnym**, a nie polem `aborted_by` na epizodzie,
+i to jest całe rozstrzygnięcie tej fazy. Liczbę epizodów między interwencjami
+da się policzyć i z pola, i z tabeli — ale pytanie „na którym etapie ludzie
+przerywają najczęściej", od którego zaczyna się następny trening, daje się
+zadać wyłącznie tabeli.
+
+| Decyzja | Odrzucona alternatywa | Dlaczego |
+| --- | --- | --- |
+| Interwencja jako własna tabela | pole `aborted_by` na epizodzie | interwencja ma własny czas, etap, sprawcę i przyczynę; wtłoczona w kolumnę gubi wszystkie cztery i zostaje tylko „była" |
+| Interwencja **nie** zmienia wyniku epizodu | automatyczne `outcome = aborted` | skasowałoby różnicę między „człowiek poprawił coś w locie, zadanie się udało" a „człowiek przerwał, zadanie przepadło" |
+| Epizod bez `policy_version_id` jest dopuszczalny | wymóg przypisania | praca teleoperacyjna też jest epizodem; wykluczenie jej zawyżałoby autonomię dokładnie o te przypadki, w których jej nie było |
+| `episode_id` na interwencji nullowalne | `not null` | człowiek, który zatrzymał stanowisko między epizodami, też interweniował |
+| Brak interwencji → `meanEpisodesBetweenInterventions = null` | nieskończoność albo bardzo duża liczba | zero interwencji na trzech epizodach nie jest dowodem autonomii, tylko brakiem danych, i raport ma to mówić wprost |
+| Epizod z interwencją nie należy do serii, którą kończy | zaliczanie go do serii | zawyżałoby wynik o jeden przy każdym przerwaniu, czyli najbardziej tam, gdzie wdrożenie idzie źle |
+| Rodzaje interwencji uporządkowane po ciężarze | jeden licznik „przerwań" | wdrożenie z samymi poprawkami otoczenia i wdrożenie z samymi zatrzymaniami awaryjnymi mają identyczny licznik i nie są tym samym wdrożeniem |
+| Raport liczony czystą funkcją na wczytanej księdze | agregat w SQL-u raportu | reguła w SQL-u jest nieweryfikowalna inaczej niż drugim SQL-em; ta ma test jednostkowy na każdy wariant serii |
+| Licznik interwencji zdenormalizowany **plus** komenda przeliczająca | sama denormalizacja albo samo złączenie | denormalizacja bez drogi powrotnej to dług spłacany ręcznym UPDATE-em o drugiej w nocy |
+| `verifyAgainstLedger` w odpowiedzi endpointu | kontrola tylko w teście | rozjazd raportu z księgą ma być widoczny na ekranie, a nie zauważony po kwartale |
+| Numer kolejny epizodu nadaje centrala | numer od agenta | agent po restarcie zaczyna od nowa, a kadencja liczona jest po całym życiu maszyny |
+| `employee` może zgłaszać interwencje | uprawnienie dla przełożonego | uprawnienie, o które trzeba prosić, kończy się niezgłaszanymi interwencjami — a to psuje jedyną liczbę, która mówi, czy wdrożenie idzie do przodu |
+
+Uruchomienie:
+
+```bash
+./mercato/install.sh episodes
+cd /sciezka/do/open-mercato/apps/mercato
+yarn generate && yarn mercato db migrate
+yarn mercato auth sync-role-acls
+yarn mercato deployment assign --robot FR3-0001 --policy insert-peg-fr3 --release
+yarn mercato episodes simulate --count 120 --seed 77001
+yarn mercato episodes cadence
+yarn mercato episodes prove        # dowód fazy
+yarn mercato episodes reconcile    # przeliczenie liczników z tabeli interwencji
+```
+
+Ekran: `/backend/episodes`, uprawnienie `episodes.view`.
+
+### Dowód fazy 3
+
+Warunek zaliczenia brzmiał: *raport „epizody między interwencjami" liczony per
+polityka i per cela, zgodny co do sztuki z księgą epizodów.* „Co do sztuki"
+sprawdzamy krzyżowo — raport liczy czysta funkcja przechodząca po wczytanej
+księdze, a kontrolę liczy **baza** osobnym zapytaniem, które nie dotyka
+licznika zdenormalizowanego:
+
+```
+DOWÓD FAZY 3 — kadencja autonomii zgodna z księgą
+
+1) raport kontra księga
+   raport: 200 epizodów, 27 interwencji
+   księga: 200 epizodów, 27 interwencji
+   spójne: true
+
+2) epizody między interwencjami per polityka (raport ↔ niezależne zapytanie)
+   insert-peg-fr3 v1    raport ep   60 int   6  │  SQL ep   60 int   6  │  zgodne  │  ep/int 10.00
+   pick-bin-ur10e v1    raport ep   50 int   6  │  SQL ep   50 int   6  │  zgodne  │  ep/int  8.33
+   pick-bin-ur10e v2    raport ep   30 int   4  │  SQL ep   30 int   4  │  zgodne  │  ep/int  7.50
+   (bez polityki)        ep 60  int 11  — poza raportem per polityka, celowo
+
+3) epizody między interwencjami per cela (raport ↔ niezależne zapytanie)
+   Cela A — gniazdo odkładcze      raport ep  200 int  27  │  SQL ep  200 int  27  │  zgodne
+
+4) niezmiennik serii
+   suma długości serii 173 = epizody bez interwencji 173: true
+   z interwencją 27 + bez 173 = 200: true
+
+   Rozjazdów: 0. Raport zgadza się z księgą co do sztuki.
+```
+
+Zgodność sama w sobie nic nie dowodzi, jeśli kontrola nie potrafi zawieść.
+Dlatego drugą połową dowodu jest celowe zepsucie licznika jednym UPDATE-em
+i sprawdzenie, że raport to zauważa:
+
+```
+$ psql -c "update episodes_episodes set intervention_count = intervention_count + 1
+           where id = (select id from episodes_episodes order by sequence limit 1)"
+
+$ yarn mercato episodes prove
+   raport: 200 epizodów, 28 interwencji
+   księga: 200 epizodów, 27 interwencji
+   spójne: false
+   ROZJAZD: liczba interwencji: raport 28, księga 27
+   Cela A — gniazdo odkładcze      raport ep  200 int  28  │  SQL ep  200 int  27  │  ROZJAZD
+   Rozjazdów: 1. RAPORT NIE ZGADZA SIĘ Z KSIĘGĄ.
+
+$ yarn mercato episodes reconcile
+Sprawdzono epizodów: 200, poprawiono: 1
+  beeb37b3-0393-4665-afc3-5db2bf94c965: licznik 2 → 1
+
+$ yarn mercato episodes prove
+   spójne: true
+   Rozjazdów: 0. Raport zgadza się z księgą co do sztuki.
+```
+
+Ścieżka sieciowa, konto `employee`:
+
+```
+GET /api/episodes/cadence  →  200
+ledger: {'episodes': 200, 'interventions': 27} consistency: {'consistent': True, 'problems': []}
+overall: ep=200 int=27 ep/int=7.41 seria=7 najdl=15 autonomia=86.5%
+  polityka insert-peg-fr3 v1 ep=60 int=6 ep/int=10.00
+  polityka pick-bin-ur10e v1 ep=50 int=6 ep/int=8.33
+  polityka pick-bin-ur10e v2 ep=30 int=4 ep/int=7.50
+po etapie:    {"przeniesienie": 10, "podejście": 7, "odłożenie": 5, "wycofanie": 5}
+po ciężarze:  {"abort": 5, "adjust": 9, "estop": 7, "manual_reset": 2, "teleop_takeover": 4}
+```
+
+Dwie ostatnie linie są tym, po co ta faza powstała. „Przeniesienie" jako
+najczęstszy etap przerwania to konkretna lista epizodów do zebrania w zbiór
+fazy 6; siedem zatrzymań awaryjnych przy dziewięciu poprawkach otoczenia to
+zupełnie inne wdrożenie niż dziewięć poprawek i zero `estop`, mimo że łączny
+licznik przerwań byłby identyczny.
+
+#### Błędy znalezione przez `tsc --noEmit` po zielonej suicie
+
+Dwa, oba niewidoczne w 35 testach:
+
+- `as never` przy `em.findOne` zawęziło typ zmiennej do `never`, przez co
+  **każdy** odczyt pola z epizodu był błędem typu. Testy tego nie widzą, bo
+  atrapa `EntityManager` jest typowana luźno. Naprawione nazwanym aliasem
+  `EpisodeRef` i rzutowaniem przez `unknown`.
+- `KpiCard` przyjmuje `value: number | null`, a komponent podawał sformatowany
+  łańcuch. Naprawione przez `formatValue`.
+
+To jest dokładnie ten krok, o którym mowa w regule projektu: zielona suita nie
+jest warunkiem zaliczenia.

@@ -64,6 +64,23 @@ function resolveEm(ctx: { container: { resolve: (key: string) => unknown } }): E
   return (ctx.container.resolve('em') as EntityManager).fork()
 }
 
+/**
+ * Nazwany kształt epizodu używany przez komendę interwencji.
+ *
+ * Alias istnieje, bo `as unknown as typeof episode` przy zmiennej
+ * zainicjowanej na `null` zawęża typ do `null`, a po `if (!episode) throw`
+ * do `never` — i każdy odczyt pola staje się błędem widocznym wyłącznie
+ * w `tsc --noEmit`, nigdy w teście. Atrapa EntityManagera jest typowana
+ * luźno i przepuszcza to bez mrugnięcia.
+ */
+type EpisodeRef = {
+  id: string
+  robotId: string
+  cellId?: string | null
+  policyVersionId?: string | null
+  interventionCount: number
+}
+
 export type EpisodeRecordResult = {
   episodeId: string
   sequence: number
@@ -133,19 +150,21 @@ const recordInterventionCommand: CommandHandler<
     const input = interventionRecordSchema.parse(rawInput ?? {})
     const em = resolveEm(ctx)
 
-    let episode: {
-      id: string
-      robotId: string
-      cellId?: string | null
-      policyVersionId?: string | null
-      interventionCount: number
-    } | null = null
+    let episode: EpisodeRef | null = null
 
     if (input.episodeId) {
+      /**
+       * Rzutowanie idzie przez `unknown`, a nie przez `never`.
+       *
+       * `as never` kompiluje się i zawęża typ do `never`, przez co **każdy**
+       * odczyt pola z tego obiektu staje się błędem dopiero przy `tsc`, a nigdy
+       * w teście — atrapa `EntityManager` jest i tak typowana luźno. To był
+       * realny błąd znaleziony przez `tsc --noEmit` po zielonej suicie.
+       */
       episode = (await em.findOne(Episode, {
         id: input.episodeId,
         tenantId: input.tenantId,
-      } as never)) as never
+      } as never)) as unknown as EpisodeRef | null
       if (!episode) throw new Error(`Epizod ${input.episodeId} nie istnieje.`)
       if (episode.robotId !== input.robotId) {
         // Interwencja przypisana do cudzego epizodu zepsułaby kadencję obu

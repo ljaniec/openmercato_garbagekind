@@ -162,11 +162,14 @@ export default function CadenceBoard() {
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard
           title="Epizodów na interwencję"
-          value={overall ? formatMean(overall.meanEpisodesBetweenInterventions) : null}
+          value={overall?.meanEpisodesBetweenInterventions ?? null}
           loading={loading}
+          formatValue={(value) => value.toFixed(1)}
           footer={
             <span className="text-xs text-muted-foreground">
-              jedyna liczba, która mówi, czy wdrożenie idzie do przodu
+              {overall && overall.meanEpisodesBetweenInterventions === null
+                ? 'nie było jeszcze ani jednej interwencji — to brak danych, nie autonomia'
+                : 'jedyna liczba, która mówi, czy wdrożenie idzie do przodu'}
             </span>
           }
         />
@@ -192,8 +195,9 @@ export default function CadenceBoard() {
         />
         <KpiCard
           title="Autonomia"
-          value={overall ? `${(overall.autonomyRate * 100).toFixed(0)}%` : null}
+          value={overall ? overall.autonomyRate * 100 : null}
           loading={loading}
+          formatValue={(value) => `${value.toFixed(0)}%`}
           footer={
             <span className="text-xs text-muted-foreground">
               epizodów bez udziału człowieka; skuteczność {overall ? `${(overall.successRate * 100).toFixed(0)}%` : '—'}
