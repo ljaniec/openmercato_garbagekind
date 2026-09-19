@@ -53,6 +53,16 @@ const payload = {
     { sku: '20 01 02', name: 'Szklo opakowaniowe', quantityKg: 77218, reorderPointKg: 10000, belowReorderPoint: false },
   ],
   flow: [{ sku: '20 01 01', receivedKg: 63000, sortedKg: 50300, issuedKg: 45700 }],
+  sales: {
+    orders: 40,
+    invoices: 40,
+    netPln: 48250.75,
+    grossPln: 59348.42,
+    topBuyers: [
+      { nazwa: 'Stora Papier Recykling', netPln: 21340.5, orders: 12 },
+      { nazwa: 'PlastMet Sp. z o.o.', netPln: 15002.25, orders: 9 },
+    ],
+  },
   movements: [
     {
       id: 'm1',
@@ -156,6 +166,40 @@ describe('SortowniaDashboard', () => {
     expect(screen.getByText('Sortowanie')).toBeInTheDocument()
     expect(screen.getByText('SORT')).toBeInTheDocument()
     expect(screen.getByText('WZ')).toBeInTheDocument()
+  })
+
+  it('pokazuje przychód ze sprzedaży frakcji — stary system nie umiał tego powiedzieć', async () => {
+    render(<SortowniaDashboard />)
+    expect(await screen.findByText('Sprzedaż frakcji')).toBeInTheDocument()
+    expect(screen.getByText('Przychód netto')).toBeInTheDocument()
+    expect(screen.getByText('48251 zł')).toBeInTheDocument()
+  })
+
+  it('mówi wprost, że każde wydanie zostało zafakturowane', async () => {
+    render(<SortowniaDashboard />)
+    await screen.findByText('Sprzedaż frakcji')
+    expect(screen.getByText('każde wydanie zafakturowane')).toBeInTheDocument()
+  })
+
+  it('wskazuje lukę, gdy część wydań nie ma faktury', async () => {
+    respondWith({ ...payload, sales: { ...payload.sales, invoices: 37 } })
+    render(<SortowniaDashboard />)
+    await screen.findByText('Sprzedaż frakcji')
+    expect(screen.getByText('3 bez faktury')).toBeInTheDocument()
+  })
+
+  it('wymienia największych odbiorców z kwotą', async () => {
+    render(<SortowniaDashboard />)
+    await screen.findByText('Najwięksi odbiorcy')
+    expect(screen.getByText('Stora Papier Recykling')).toBeInTheDocument()
+    expect(screen.getByText('12 wydań')).toBeInTheDocument()
+  })
+
+  it('nie pokazuje sekcji sprzedaży, gdy import jej nie objął', async () => {
+    respondWith({ ...payload, sales: { orders: 0, invoices: 0, netPln: 0, grossPln: 0, topBuyers: [] } })
+    render(<SortowniaDashboard />)
+    await screen.findByText('Na placu przyjęć')
+    expect(screen.queryByText('Sprzedaż frakcji')).not.toBeInTheDocument()
   })
 
   it('pokazuje przepływ frakcji jako wykres', async () => {

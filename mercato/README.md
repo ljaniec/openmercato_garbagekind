@@ -15,6 +15,10 @@ Open Mercato już ma, przede wszystkim na **WMS**.
 | `stockmoves` `SORT` (**para** wierszy) | komenda `wms.inventory.move` → **jeden** ruch `transfer` | przesunięcie staje się atomowe |
 | `stockmoves` `WZ` | komenda `wms.inventory.adjust` → ruch `adjust` | |
 | `stkmoveno` | deterministyczny `referenceId` → `idempotency_key` WMS | powtórzony import odbija się od bazy |
+| `debtorsmaster` (kontrahenci) | `customer_entities` + `customer_companies` (komenda `customers.companies.create`) | historia kontaktów, opiekun, etykiety — rzeczy, których płaska tabela nie miała gdzie trzymać |
+| `salesorders` | `sales_orders` + `sales_order_lines` (komenda `sales.orders.create`) | cena za kilogram, odbiorca, wartość netto i brutto liczona przez silnik podatkowy |
+| — (nie istniało) | `sales_invoices` (komenda `sales.invoices.create`) | faktura z numerem nadanym przez platformę |
+| `stockmoves.orderno` | metadane ruchu WMS → `salesOrderId` | z pozycji magazynowej wchodzi się na dokument sprzedaży |
 
 ## Dwa kanały źródłowe
 
@@ -92,13 +96,44 @@ i magazyn zawsze mówią to samo. Pulpit odświeża się co 30 sekund.
 numerze ruchu i parametrem „przebieg próbny". Dzięki temu synchronizacja ma
 kolejkę, wznawianie, historię przebiegów i pasek postępu — zamiast crona i CSV.
 
+## Pełna ścieżka ERP
+
+Import przechodzi pięć zbiorów w kolejności, która nie jest kosmetyczna —
+zamówienie potrzebuje kontrahenta i frakcji, a ruch `WZ` potrzebuje zamówienia:
+
+```
+topologia → frakcje → kontrahenci → zamówienia (+faktury) → księga ruchów
+```
+
+Wszystko idzie komendami platformy (`commandBus`), a nie zapisem do encji.
+Komenda odpala zdarzenia, wpis do dziennika audytu i indeks wyszukiwania —
+zapis na skróty dałby wiersz w bazie, którego reszta Open Mercato by nie widziała.
+
+Zweryfikowane na żywej instancji: 8 kontrahentów, 40 zamówień, 40 faktur
+(`INV-20260919-00001` … `-00040`, numery nadane przez
+`salesDocumentNumberGenerator`), 152 372,18 zł netto i 187 417,79 zł brutto.
+
+### Dwa błędy, które wyszły dopiero na żywych danych
+
+1. **`sales.invoices.create` gubi powiązanie z zamówieniem.** Komenda przyjmuje
+   `orderId`, sprawdza, że zamówienie istnieje w tym samym zakresie, a potem
+   zapisuje encję przez `em.create(SalesInvoice, { orderId })`. Encja ma jednak
+   wyłącznie relację `order` (`@ManyToOne`, kolumna `order_id`), więc MikroORM
+   po cichu odrzuca nieznaną właściwość. Efekt: 40 faktur z pustym `order_id`.
+   To błąd po stronie platformy, nie modułu — obchodzimy go `nativeUpdate` na
+   relacji, z komentarzem w `lib/salesOrders.ts`.
+2. **Nazwy kontrahentów są szyfrowane w spoczynku.** Odczyt `display_name`
+   surowym SQL-em oddaje kryptogram (`BZhh3D8l…:v1`) i ląduje on wprost na
+   ekranie operatora. Agregaty kwotowe liczymy SQL-em po identyfikatorze,
+   a nazwy dociągamy `findWithDecryption`.
+
 ## Testy
 
 Moduł korzysta z narzędzi, które Open Mercato ma na pokładzie: Jest do testów
 jednostkowych i Playwright do integracyjnych (`__integration__/`, odkrywane
 przez `OM_INTEGRATION_MODULES`). Nic własnego nie dokładamy.
 
-Testy jednostkowe — 98 przypadków, 8 zestawów, bez bazy i bez sieci:
+Testy jednostkowe — 131 przypadków, 10 zestawów, bez bazy i bez sieci:
 
 ```bash
 cd apps/mercato
@@ -108,7 +143,9 @@ yarn test --testPathPatterns "modules/sortownia"
 Obejmują klienta XML-RPC (ramka żądania, ciastko sesji, kody 0/3/4/−1/−2,
 `<fault>`), czytnik plików (BOM, cudzysłowy, polski przecinek dziesiętny,
 determinizm `legacyUuid`), topologię, frakcje, parowanie `SORT`, mapowanie na
-komendy WMS, trasę pulpitu i sam komponent pulpitu (jsdom + Testing Library).
+komendy WMS, zakładanie kontrahentów w CRM, budowę zamówień i faktur
+(jednostka, cena za kilogram, VAT, idempotencja), trasę pulpitu i sam komponent
+pulpitu (jsdom + Testing Library).
 
 Cross-walidacja z legacy — porównuje odpowiedź pulpitu z księgą `out/ruchy.csv`:
 
@@ -123,12 +160,16 @@ wiersze w kilogramach, Mercato prowadzi salda w WMS i zwija parę `SORT` w jeden
 `transfer`. Test sprawdza salda per lokalizacja i per frakcja, liczbę ruchów
 (`reszta + pary/2`), podział plac/boksy, brak ujemnych stanów, zapełnienie
 względem pojemności i to, że każdy ruch niesie numer ze starego systemu.
+Po stronie sprzedaży: liczbę zamówień wobec `zamowienia.csv`, komplet faktur,
+przychód netto policzony z cennika legacy co do grosza, relację brutto/netto
+oraz to, że nazwy odbiorców są czytelne, a nie kryptogramem z bazy.
 Jeżeli mapowanie gdzieś się przekłamie — zgubiony znak, zgubiona para, pomylona
 jednostka — salda się rozjadą i ten test to pokaże.
 
-Strona legacy ma własny zestaw (`python3 tests/test_end_to_end.py`, 11 testów),
-który pilnuje m.in. tego, że stan nigdy nie schodzi poniżej zera i że
-powierzchnia XML-RPC nie zawiera metod, których webERP nie ma.
+Strona legacy ma własny zestaw (`python3 tests/test_end_to_end.py`, 16 testów),
+który pilnuje m.in. tego, że stan nigdy nie schodzi poniżej zera, że powierzchnia
+XML-RPC nie zawiera metod, których webERP nie ma, że NIP przechodzi kontrolę sumy
+kontrolnej i że każde `WZ` wskazuje istniejące zamówienie, a `PZ` i `SORT` — nie.
 
 ## Stan na dziś
 
@@ -145,8 +186,8 @@ Zweryfikowane uruchomieniem na żywej instancji (Postgres + Redis + `apps/mercat
 Pulpit sprawdzony w przeglądarce (zalogowanie, render, zrzut ekranu): kafelki,
 wykres przepływu, zapełnienie boksów i księga ruchów zasilają się z żywej bazy.
 
-Testy: 98 jednostkowych i 11 po stronie legacy przechodzi, cross-walidacja
-(8 przypadków Playwright) przechodzi na żywym stacku bez ponowień.
+Testy: 131 jednostkowych i 16 po stronie legacy przechodzi, cross-walidacja
+(13 przypadków Playwright) przechodzi na żywym stacku bez ponowień.
 
 Nie zrobione jeszcze: uruchamianie importu z panelu Data Sync end‑to‑end
 (adapter jest zarejestrowany i waliduje połączenie, ale przebiegi odpalaliśmy

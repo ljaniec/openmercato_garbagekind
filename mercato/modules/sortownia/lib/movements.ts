@@ -39,6 +39,14 @@ export type MovementContext = {
   locations: Map<string, WarehouseLocation>
   fractions: FractionIndex
   performedBy: string
+  /**
+   * `orderno` → identyfikator zamówienia sprzedaży w Mercato.
+   *
+   * Pozwala wydaniu wskazać dokument, który je zleca. Pusty indeks jest
+   * poprawny: import ruchów wolno puścić bez modułu sprzedaży, wtedy korekta
+   * zostaje samą korektą, tak jak było wcześniej.
+   */
+  salesOrders?: Map<number, string>
 }
 
 /** Para wierszy SORT: zejście z placu i przyjęcie na boks. */
@@ -231,11 +239,28 @@ async function applyIssue(ctx: MovementContext, row: LegacyMovementRow): Promise
       referenceId,
       performedBy: ctx.performedBy,
       performedAt: parseMoment(row.data),
-      metadata: { legacy: { stkmoveno: row.stkmoveno, typ: row.typ, debtorno: row.debtorno || null } },
+      metadata: {
+        legacy: {
+          stkmoveno: row.stkmoveno,
+          typ: row.typ,
+          debtorno: row.debtorno || null,
+          orderno: row.orderno || null,
+        },
+        // Identyfikator dokumentu sprzedaży, który to wydanie realizuje.
+        // `referenceId` jest zajęty przez klucz idempotencji liczony ze
+        // `stkmoveno`, więc powiązanie z zamówieniem idzie metadanymi.
+        salesOrderId: salesOrderIdFor(ctx, row) ?? null,
+      },
     },
     ctx: ctx.commandContext,
   })
   return false
+}
+
+/** Zamówienie, które realizuje to wydanie — o ile import objął sprzedaż. */
+function salesOrderIdFor(ctx: MovementContext, row: LegacyMovementRow): string | undefined {
+  if (!row.orderno) return undefined
+  return ctx.salesOrders?.get(row.orderno)
 }
 
 function isDuplicate(error: unknown): boolean {

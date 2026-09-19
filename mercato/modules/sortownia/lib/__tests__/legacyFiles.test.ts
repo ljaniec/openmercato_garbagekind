@@ -77,6 +77,8 @@ describe('readMovements', () => {
         debtorno: 'D001',
         iloscKg: 6412.8,
         iloscMg: 6.413,
+        // PZ nie realizuje zamówienia — pusta kolumna daje 0, czyli „brak".
+        orderno: 0,
       },
     ])
   })

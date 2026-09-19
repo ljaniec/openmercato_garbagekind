@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import sqlite3
 import pathlib
 import sys
 import tempfile
@@ -102,6 +103,77 @@ class EndToEndTest(unittest.TestCase):
         now = dt.datetime.now().isoformat()
         for move in moves:
             self.assertLessEqual(move["trandate"], now, "zrzut zawiera ruch z przyszlosci")
+
+    def test_nip_has_a_valid_checksum(self) -> None:
+        """NIP musi przejsc kontrole, ktora zrobi pierwsza ksiegowa."""
+        weights = (6, 5, 7, 2, 3, 4, 5, 6, 7)
+        for row in generate.DEBTORS:
+            taxref = row[8]
+            self.assertEqual(len(taxref), 10, f"{row[0]}: NIP ma miec 10 cyfr")
+            self.assertTrue(taxref.isdigit(), f"{row[0]}: NIP ma byc cyframi")
+            checksum = sum(int(d) * w for d, w in zip(taxref[:9], weights)) % 11
+            self.assertEqual(checksum, int(taxref[9]),
+                             f"{row[0]}: cyfra kontrolna NIP-u sie nie zgadza")
+
+    def test_customer_api_exposes_tax_number(self) -> None:
+        """GetCustomer oddaje NIP - bez niego nie ma z czego wystawic faktury."""
+        with xmlrpc.client.ServerProxy(self.url, transport=CookieTransport(), allow_none=True) as proxy:
+            proxy.weberp.xmlrpc_Login("demo", "demo", "weberpdemo")
+            record = proxy.weberp.xmlrpc_GetCustomer("D005")
+        self.assertIn("taxref", record)
+        self.assertEqual(len(record["taxref"]), 10)
+
+    def test_every_issue_points_at_a_sales_order(self) -> None:
+        """Kazde WZ wskazuje zamowienie, a PZ i SORT - nie.
+
+        Bez tej kolumny odtworzenie, co komu sprzedano, sprowadza sie do
+        zgadywania po dacie i ilosci. Z nia jest to zwykle zlaczenie.
+        """
+        conn = sqlite3.connect(self.db)
+        try:
+            rows = conn.execute("SELECT type, orderno FROM stockmoves").fetchall()
+            orders = {r[0] for r in conn.execute("SELECT orderno FROM salesorders")}
+        finally:
+            conn.close()
+        self.assertTrue(rows, "brak ruchow w ksiedze")
+        for typ, orderno in rows:
+            if typ == "WZ":
+                self.assertIsNotNone(orderno, "WZ bez zamowienia")
+                self.assertIn(orderno, orders, f"WZ wskazuje nieistniejace zamowienie {orderno}")
+            else:
+                self.assertIsNone(orderno, f"{typ} nie powinien wskazywac zamowienia")
+
+    def test_sales_order_matches_its_issue(self) -> None:
+        """Naglowek zamowienia zgadza sie z ruchem, ktory je realizuje."""
+        conn = sqlite3.connect(self.db)
+        try:
+            pairs = conn.execute(
+                "SELECT m.stockid, m.qty, m.debtorno, o.stockid, o.qty, o.debtorno "
+                "FROM stockmoves m JOIN salesorders o ON o.orderno = m.orderno "
+                "WHERE m.type = 'WZ'"
+            ).fetchall()
+        finally:
+            conn.close()
+        self.assertTrue(pairs, "brak powiazanych wydan")
+        for m_stock, m_qty, m_debtor, o_stock, o_qty, o_debtor in pairs:
+            self.assertEqual(m_stock, o_stock)
+            self.assertEqual(m_debtor, o_debtor)
+            # WZ jest ujemne (konwencja webERP), zamowienie dodatnie.
+            self.assertAlmostEqual(abs(m_qty), o_qty, places=2)
+
+    def test_order_keys_go_through_the_file_drop(self) -> None:
+        """Zamowienia ida tym samym ukladem co kontrahenci: klucze w pliku."""
+        path = self.wsad / spooler.ORDERS_FILE
+        self.assertTrue(path.exists(), "brak pliku z numerami zamowien")
+        with path.open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertTrue(rows)
+        self.assertEqual(list(rows[0].keys()), ["orderno"])
+        with xmlrpc.client.ServerProxy(self.url, transport=CookieTransport(), allow_none=True) as proxy:
+            proxy.weberp.xmlrpc_Login("demo", "demo", "weberpdemo")
+            header = proxy.weberp.xmlrpc_GetSalesOrderHeader(int(rows[0]["orderno"]))
+        self.assertIsInstance(header, dict)
+        self.assertIn("unitprice", header)
 
     def test_drop_grows_over_time(self) -> None:
         before = len(xlsx.read(self.wsad / spooler.MOVES_FILE))

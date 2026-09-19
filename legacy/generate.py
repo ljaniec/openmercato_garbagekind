@@ -32,16 +32,29 @@ SCHEMA = HERE / "schema.sql"
 # Ziarno stale: ta sama baza przy kazdym uruchomieniu, zeby demo bylo powtarzalne.
 SEED = 20250918
 
+def nip(base9: str) -> str:
+    """NIP z poprawna cyfra kontrolna (wagi 6,5,7,2,3,4,5,6,7, modulo 11).
+
+    Dane maja wygladac jak wyciagniete z rejestru, a nie jak losowe cyfry -
+    pierwszy ksiegowy, ktory je zobaczy, sprawdzi wlasnie sume kontrolna.
+    """
+    weights = (6, 5, 7, 2, 3, 4, 5, 6, 7)
+    checksum = sum(int(d) * w for d, w in zip(base9, weights)) % 11
+    if checksum == 10:
+        raise ValueError(f"NIP {base9} nie ma poprawnej cyfry kontrolnej")
+    return base9 + str(checksum)
+
+
 DEBTORS = [
-    # debtorno, name, address1, address2 (miasto), debtortype, currcode, clientsince, creditlimit
-    ("D001", "Gmina Wieliszew",              "ul. Modlinska 12",     "Wieliszew",  "DOS", "PLN", "2011-03-14", 0.0),
-    ("D002", "Spoldzielnia Mieszkaniowa Zorza", "ul. Sloneczna 4",   "Legionowo",  "DOS", "PLN", "2013-09-01", 0.0),
-    ("D003", "PPHU Transbud",                "ul. Przemyslowa 88",   "Nowy Dwor",  "DOS", "PLN", "2016-06-20", 0.0),
-    ("D004", "Zaklad Komunalny Serock",      "ul. Nadrzeczna 3",     "Serock",     "DOS", "PLN", "2009-01-08", 0.0),
-    ("D005", "Stora Papier Recykling",       "ul. Fabryczna 21",     "Ostroleka",  "ODB", "PLN", "2012-04-02", 250000.0),
-    ("D006", "PlastMet Sp. z o.o.",          "ul. Tworzywowa 7",     "Plock",      "ODB", "PLN", "2014-11-17", 180000.0),
-    ("D007", "Huta Szkla Jaroslaw",          "ul. Hutnicza 1",       "Jaroslaw",   "ODB", "EUR", "2018-02-05", 120000.0),
-    ("D008", "Cementownia Odolanow RDF",     "ul. Wapienna 40",      "Odolanow",   "ODB", "PLN", "2019-08-22", 300000.0),
+    # debtorno, name, address1, address2 (miasto), debtortype, currcode, clientsince, creditlimit, taxref
+    ("D001", "Gmina Wieliszew",              "ul. Modlinska 12",     "Wieliszew",  "DOS", "PLN", "2011-03-14", 0.0, nip("536178001")),
+    ("D002", "Spoldzielnia Mieszkaniowa Zorza", "ul. Sloneczna 4",   "Legionowo",  "DOS", "PLN", "2013-09-01", 0.0, nip("536241002")),
+    ("D003", "PPHU Transbud",                "ul. Przemyslowa 88",   "Nowy Dwor",  "DOS", "PLN", "2016-06-20", 0.0, nip("536310003")),
+    ("D004", "Zaklad Komunalny Serock",      "ul. Nadrzeczna 3",     "Serock",     "DOS", "PLN", "2009-01-08", 0.0, nip("536422004")),
+    ("D005", "Stora Papier Recykling",       "ul. Fabryczna 21",     "Ostroleka",  "ODB", "PLN", "2012-04-02", 250000.0, nip("774113005")),
+    ("D006", "PlastMet Sp. z o.o.",          "ul. Tworzywowa 7",     "Plock",      "ODB", "PLN", "2014-11-17", 180000.0, nip("774250006")),
+    ("D007", "Huta Szkla Jaroslaw",          "ul. Hutnicza 1",       "Jaroslaw",   "ODB", "EUR", "2018-02-05", 120000.0, nip("795104007")),
+    ("D008", "Cementownia Odolanow RDF",     "ul. Wapienna 40",      "Odolanow",   "ODB", "PLN", "2019-08-22", 300000.0, nip("622187008")),
 ]
 
 STOCKS = [
@@ -188,19 +201,30 @@ def make_reserve_moves(rng: random.Random, ledger: Ledger, now: dt.datetime, cou
     return moves
 
 
-def make_sales_orders(base_moves, start_no: int):
-    """Naglowki wydan zbudowane z ruchow WZ ze zbioru bazowego."""
+def attach_sales_orders(moves, start_no: int):
+    """Kazde WZ dostaje naglowek zamowienia i wskazuje go kolumna `orderno`.
+
+    W prawdziwym webERP `stockmoves.orderno` wiaze wydanie z zamowieniem i to
+    jest jedyny sposob, zeby po stronie odbiorczej odtworzyc, co komu sprzedano.
+    Bez tej kolumny zostaje zgadywanie po dacie i ilosci - a tego sie nie robi.
+
+    Zwraca ruchy uzupelnione o `orderno` (NULL dla PZ i SORT) oraz naglowki.
+    """
     orders = []
+    out_moves = []
     no = start_no
-    for move in base_moves:
-        if move[2] != "WZ":
+    for move in moves:
+        stkmoveno, stockid, typ, loc, trandate, debtorno, qty, cost = move
+        if typ != "WZ":
+            out_moves.append(move + (None,))
             continue
-        stkmoveno, stockid, _type, _loc, trandate, debtorno, qty, cost = move
         orddate = (dt.datetime.fromisoformat(trandate) - dt.timedelta(days=2)).date().isoformat()
         deliverydate = dt.datetime.fromisoformat(trandate).date().isoformat()
+        # Cena sprzedazy: koszt frakcji z narzutem handlowym.
         orders.append((no, debtorno, orddate, deliverydate, stockid, abs(qty), round(cost * 1.35, 4)))
+        out_moves.append(move + (no,))
         no += 1
-    return orders
+    return out_moves, orders
 
 
 def build(db_path: pathlib.Path, base_moves_count: int, reserve_moves_count: int, reserve_step: int,
@@ -215,7 +239,7 @@ def build(db_path: pathlib.Path, base_moves_count: int, reserve_moves_count: int
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA.read_text(encoding="utf-8"))
 
-    conn.executemany("INSERT INTO debtorsmaster VALUES (?,?,?,?,?,?,?,?)", DEBTORS)
+    conn.executemany("INSERT INTO debtorsmaster VALUES (?,?,?,?,?,?,?,?,?)", DEBTORS)
     conn.executemany("INSERT INTO stockmaster VALUES (?,?,?,?,?,?)", STOCKS)
     conn.executemany("INSERT INTO locations VALUES (?,?,?)", LOCATIONS)
 
@@ -225,19 +249,18 @@ def build(db_path: pathlib.Path, base_moves_count: int, reserve_moves_count: int
         rng, ledger, now, reserve_moves_count, start_no=100001 + len(base_moves),
         step_seconds=reserve_step
     )
-    conn.executemany("INSERT INTO stockmoves VALUES (?,?,?,?,?,?,?,?)", base_moves + reserve_moves)
+    all_moves, sales_orders = attach_sales_orders(base_moves + reserve_moves, start_no=5001)
+    conn.executemany("INSERT INTO stockmoves VALUES (?,?,?,?,?,?,?,?,?)", all_moves)
 
     # Stany magazynowe wynikaja ze zbioru bazowego (ruchy zapasowe jeszcze "nie zaszly").
     balances: dict[tuple[str, str], float] = {}
-    for _no, stockid, _type, loccode, _trandate, _debtorno, qty, _cost in base_moves:
+    for _no, stockid, _type, loccode, _trandate, _debtorno, qty, _cost in base_moves:  # bez orderno
         key = (stockid, loccode)
         balances[key] = round(balances.get(key, 0.0) + qty, 2)
     for (stockid, loccode), qty in balances.items():
         conn.execute("INSERT INTO locstock VALUES (?,?,?)", (stockid, loccode, qty))
 
-    conn.executemany(
-        "INSERT INTO salesorders VALUES (?,?,?,?,?,?,?)", make_sales_orders(base_moves, start_no=5001)
-    )
+    conn.executemany("INSERT INTO salesorders VALUES (?,?,?,?,?,?,?)", sales_orders)
 
     conn.commit()
     counts = {

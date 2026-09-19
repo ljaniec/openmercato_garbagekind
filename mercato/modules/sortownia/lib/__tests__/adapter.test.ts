@@ -1,5 +1,7 @@
 import {
+  ENTITY_CUSTOMERS,
   ENTITY_FRACTIONS,
+  ENTITY_SALES_ORDERS,
   ENTITY_MOVEMENTS,
   ENTITY_TOPOLOGY,
   PROVIDER_KEY,
@@ -83,14 +85,23 @@ describe('parseMovementCursor', () => {
 })
 
 describe('kontrakt adaptera', () => {
-  it('przedstawia się hubowi jako import z trzema zbiorami danych', () => {
+  it('przedstawia się hubowi jako import z pięcioma zbiorami danych', () => {
     expect(sortowniaLegacyAdapter.providerKey).toBe(PROVIDER_KEY)
     expect(sortowniaLegacyAdapter.direction).toBe('import')
     expect(sortowniaLegacyAdapter.supportedEntities).toEqual([
       ENTITY_TOPOLOGY,
       ENTITY_FRACTIONS,
+      ENTITY_CUSTOMERS,
+      ENTITY_SALES_ORDERS,
       ENTITY_MOVEMENTS,
     ])
+  })
+
+  it('kolejność zbiorów nie jest kosmetyczna — zamówienie wymaga kontrahenta i frakcji, ruch WZ wymaga zamówienia', () => {
+    const order = sortowniaLegacyAdapter.supportedEntities
+    expect(order.indexOf(ENTITY_CUSTOMERS)).toBeLessThan(order.indexOf(ENTITY_SALES_ORDERS))
+    expect(order.indexOf(ENTITY_FRACTIONS)).toBeLessThan(order.indexOf(ENTITY_SALES_ORDERS))
+    expect(order.indexOf(ENTITY_SALES_ORDERS)).toBeLessThan(order.indexOf(ENTITY_MOVEMENTS))
   })
 
   it('daje operatorowi przebieg próbny i nie wystawia żadnego parametru z sekretem', () => {

@@ -34,8 +34,9 @@ except ImportError:  # uruchomienie jako skrypt
 MOVES_FILE = "ruchy.xlsx"
 CUSTOMERS_FILE = "kontrahenci.csv"
 STOCK_FILE = "frakcje.csv"
+ORDERS_FILE = "zamowienia.csv"
 
-MOVES_HEADER = ["stkmoveno", "stockid", "type", "loccode", "trandate", "debtorno", "qty", "standardcost"]
+MOVES_HEADER = ["stkmoveno", "stockid", "type", "loccode", "trandate", "debtorno", "qty", "standardcost", "orderno"]
 
 
 def _connect(db_path: pathlib.Path) -> sqlite3.Connection:
@@ -58,6 +59,9 @@ def export_catalogs(db_path: pathlib.Path, wsad_dir: pathlib.Path) -> dict:
         stocks = conn.execute(
             "SELECT stockid, description, categoryid, units, actualcost, decimalplaces "
             "FROM stockmaster ORDER BY stockid").fetchall()
+        # Zamowienia ida tak samo jak kontrahenci: same klucze, szczegoly przez
+        # xmlrpc_GetSalesOrderHeader - metode, ktora w webERP naprawde istnieje.
+        orders = conn.execute("SELECT orderno FROM salesorders ORDER BY orderno").fetchall()
     finally:
         conn.close()
 
@@ -73,7 +77,12 @@ def export_catalogs(db_path: pathlib.Path, wsad_dir: pathlib.Path) -> dict:
                            ("stockid", "description", "categoryid", "units", "actualcost", "decimalplaces")]
                           for row in stocks])
 
-    return {"kontrahenci": len(customers), "frakcje": len(stocks)}
+    with (wsad_dir / ORDERS_FILE).open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["orderno"])
+        writer.writerows([[row["orderno"]] for row in orders])
+
+    return {"kontrahenci": len(customers), "frakcje": len(stocks), "zamowienia": len(orders)}
 
 
 def export_moves(db_path: pathlib.Path, wsad_dir: pathlib.Path, as_of: dt.datetime | None = None) -> int:
@@ -83,7 +92,7 @@ def export_moves(db_path: pathlib.Path, wsad_dir: pathlib.Path, as_of: dt.dateti
     conn = _connect(db_path)
     try:
         rows = conn.execute(
-            "SELECT stkmoveno, stockid, type, loccode, trandate, debtorno, qty, standardcost "
+            "SELECT stkmoveno, stockid, type, loccode, trandate, debtorno, qty, standardcost, orderno "
             "FROM stockmoves WHERE trandate <= ? ORDER BY trandate, stkmoveno", (moment,)
         ).fetchall()
     finally:
@@ -93,7 +102,8 @@ def export_moves(db_path: pathlib.Path, wsad_dir: pathlib.Path, as_of: dt.dateti
         wsad_dir / MOVES_FILE,
         MOVES_HEADER,
         [[row["stkmoveno"], row["stockid"], row["type"], row["loccode"], row["trandate"],
-          row["debtorno"] if row["debtorno"] is not None else "", row["qty"], row["standardcost"]]
+          row["debtorno"] if row["debtorno"] is not None else "", row["qty"], row["standardcost"],
+          row["orderno"] if row["orderno"] is not None else ""]
          for row in rows],
         sheet_name="stockmoves",
     )
@@ -116,7 +126,7 @@ def main() -> None:
     counts = export_catalogs(db_path, wsad_dir)
     moves = export_moves(db_path, wsad_dir)
     print(f"Zrzut w {wsad_dir}: kontrahenci {counts['kontrahenci']}, "
-          f"frakcje {counts['frakcje']}, ruchy {moves}")
+          f"frakcje {counts['frakcje']}, zamowienia {counts['zamowienia']}, ruchy {moves}")
     if args.once:
         return
 

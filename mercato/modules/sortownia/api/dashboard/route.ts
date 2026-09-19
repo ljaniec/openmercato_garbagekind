@@ -2,6 +2,8 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { resolveActiveOrganizationId } from '@open-mercato/shared/lib/auth/organizationScope'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
+import { findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
+import { CustomerEntity } from '@open-mercato/core/modules/customers/data/entities'
 
 /**
  * Dane pulpitu sortowni.
@@ -250,6 +252,74 @@ export async function GET(req: Request): Promise<Response> {
     [scope.organizationId, scope.tenantId],
   )
 
+  // Sprzedaż frakcji: to, czego stary system nie umiał powiedzieć w ogóle.
+  // Liczymy z dokumentów sprzedaży, a nie z ruchów magazynowych — pieniądze
+  // i kilogramy mają osobne źródła prawdy i tak ma zostać.
+  const [sales] = await em.getConnection().execute<Array<{
+    orders: string
+    net: string
+    gross: string
+    invoices: string
+  }>>(
+    `select count(distinct o.id) as orders,
+            coalesce(sum(o.grand_total_net_amount), 0) as net,
+            coalesce(sum(o.grand_total_gross_amount), 0) as gross,
+            count(distinct i.id) as invoices
+       from sales_orders o
+       left join sales_invoices i
+              on i.order_id = o.id
+             and i.organization_id = o.organization_id
+             and i.tenant_id = o.tenant_id
+             and i.deleted_at is null
+      where o.organization_id = ?
+        and o.tenant_id = ?
+        and o.deleted_at is null
+        and o.external_reference is not null`,
+    [scope.organizationId, scope.tenantId],
+  )
+
+  // Kwoty agregujemy SQL-em, ale nazwy kontrahentów MUSZĄ przyjść przez ORM.
+  // `customer_entities.display_name` jest szyfrowane w spoczynku, więc surowy
+  // odczyt oddaje kryptogram w rodzaju `BZhh3D8l...:v1` i ląduje on wprost na
+  // ekranie operatora. Sprawdzone na żywej bazie — dlatego agregat idzie po
+  // identyfikatorze, a nazwy dociągamy `findWithDecryption`.
+  const buyerTotals = await em.getConnection().execute<Array<{
+    customer_entity_id: string
+    net: string
+    orders: string
+  }>>(
+    `select o.customer_entity_id,
+            coalesce(sum(o.grand_total_net_amount), 0) as net,
+            count(*) as orders
+       from sales_orders o
+      where o.organization_id = ?
+        and o.tenant_id = ?
+        and o.deleted_at is null
+        and o.external_reference is not null
+        and o.customer_entity_id is not null
+      group by o.customer_entity_id
+      order by sum(o.grand_total_net_amount) desc
+      limit 5`,
+    [scope.organizationId, scope.tenantId],
+  )
+
+  const buyerIds = buyerTotals.map((row) => row.customer_entity_id)
+  const buyerEntities = buyerIds.length
+    ? await findWithDecryption(
+        em,
+        CustomerEntity,
+        { id: { $in: buyerIds } } as never,
+        {},
+        { tenantId: scope.tenantId, organizationId: scope.organizationId },
+      )
+    : []
+  const buyerNames = new Map(
+    (buyerEntities as Array<{ id: string; displayName?: string | null }>).map((row) => [
+      row.id,
+      row.displayName ?? '',
+    ]),
+  )
+
   const yardKg = locationRows
     .filter((row) => row.type === 'staging')
     .reduce((sum, row) => sum + (row.quantityKg ?? 0), 0)
@@ -278,6 +348,17 @@ export async function GET(req: Request): Promise<Response> {
         issuedKg: Number.parseFloat(row.issued),
       })),
       movements: movementRows,
+      sales: {
+        orders: Number.parseInt(sales?.orders ?? '0', 10),
+        invoices: Number.parseInt(sales?.invoices ?? '0', 10),
+        netPln: Number.parseFloat(sales?.net ?? '0'),
+        grossPln: Number.parseFloat(sales?.gross ?? '0'),
+        topBuyers: buyerTotals.map((row) => ({
+          nazwa: buyerNames.get(row.customer_entity_id) || 'Kontrahent bez nazwy',
+          netPln: Number.parseFloat(row.net),
+          orders: Number.parseInt(row.orders, 10),
+        })),
+      },
     }),
     { status: 200, headers: { 'content-type': 'application/json' } },
   )

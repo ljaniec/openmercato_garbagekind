@@ -64,6 +64,15 @@ type DashboardData = {
   fractions: FractionRow[]
   flow: FlowRow[]
   movements: MovementRow[]
+  sales?: SalesSummary
+}
+
+type SalesSummary = {
+  orders: number
+  invoices: number
+  netPln: number
+  grossPln: number
+  topBuyers: Array<{ nazwa: string; netPln: number; orders: number }>
 }
 
 /** Magazyn liczy w kilogramach, sprawozdawczość w megagramach. */
@@ -73,6 +82,14 @@ function toMg(kg: number): number {
 
 function formatMg(kg: number): string {
   return `${toMg(kg).toLocaleString('pl-PL', { minimumFractionDigits: 3, maximumFractionDigits: 3 })} Mg`
+}
+
+function formatPln(amount: number): string {
+  return amount.toLocaleString('pl-PL', {
+    style: 'currency',
+    currency: 'PLN',
+    maximumFractionDigits: 0,
+  })
 }
 
 function formatMoment(value: string | null): string {
@@ -150,6 +167,7 @@ export default function SortowniaDashboard() {
   }, [load])
 
   const totals = data?.totals
+  const sales = data?.sales
   const bins = (data?.locations ?? []).filter((row) => row.capacityKg !== null)
   // Zapełnienie widać na liście lokalizacji, więc wykres pokazuje co innego:
   // ile każdej frakcji przeszło przez zakład w ostatnim miesiącu.
@@ -203,6 +221,69 @@ export default function SortowniaDashboard() {
           }
         />
       </div>
+
+      {sales && sales.orders > 0 ? (
+        <section className="space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold">Sprzedaż frakcji</h2>
+            <p className="text-sm text-muted-foreground">
+              Wydania z magazynu jako dokumenty sprzedaży — z ceną, odbiorcą i fakturą.
+              Stary system kończył się na ujemnej liczbie w księdze ruchów.
+            </p>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <KpiCard
+              title="Przychód netto"
+              value={Math.round(sales.netPln)}
+              suffix=" zł"
+              loading={loading}
+              footer={<span className="text-xs text-muted-foreground">{formatPln(sales.grossPln)} brutto</span>}
+            />
+            <KpiCard
+              title="Zamówienia sprzedaży"
+              value={sales.orders}
+              loading={loading}
+              footer={<span className="text-xs text-muted-foreground">z wydań WZ systemu legacy</span>}
+            />
+            <KpiCard
+              title="Wystawione faktury"
+              value={sales.invoices}
+              loading={loading}
+              footer={
+                <span className="text-xs text-muted-foreground">
+                  {sales.invoices === sales.orders
+                    ? 'każde wydanie zafakturowane'
+                    : `${sales.orders - sales.invoices} bez faktury`}
+                </span>
+              }
+            />
+            <KpiCard
+              title="Średnia wartość wydania"
+              value={sales.orders ? Math.round(sales.netPln / sales.orders) : 0}
+              suffix=" zł"
+              loading={loading}
+              footer={<span className="text-xs text-muted-foreground">netto na dokument</span>}
+            />
+          </div>
+
+          {sales.topBuyers.length ? (
+            <div className="rounded-lg border">
+              <div className="border-b px-4 py-2 text-sm font-medium">Najwięksi odbiorcy</div>
+              <div className="divide-y">
+                {sales.topBuyers.map((buyer) => (
+                  <div key={buyer.nazwa} className="flex items-center justify-between gap-4 px-4 py-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm">{buyer.nazwa}</div>
+                      <div className="text-xs text-muted-foreground">{buyer.orders} wydań</div>
+                    </div>
+                    <div className="text-sm tabular-nums">{formatPln(buyer.netPln)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       {alerts.length > 0 ? (
         <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3">

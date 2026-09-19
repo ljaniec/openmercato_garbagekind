@@ -12,14 +12,20 @@ import type {
 import { User } from '@open-mercato/core/modules/auth/data/entities'
 import { LegacyRpcClient, RPC_OK } from './legacyRpc'
 import {
+  customersFile,
   fileExists,
   fractionsFile,
   legacyOutDir,
   movementsFile,
+  ordersFile,
+  readCustomers,
   readFractions,
   readMovements,
+  readOrders,
   type LegacyMovementRow,
 } from './legacyFiles'
+import { ensureCustomers, loadCustomerIndex } from './customers'
+import { applySalesOrders, loadSalesOrderIndex } from './salesOrders'
 import { ensureFractions, loadFractionIndex } from './fractions'
 import { applyMovementBatch, type MovementContext } from './movements'
 import { ensureTopology, loadLocationIndex } from './topology'
@@ -38,6 +44,8 @@ export const PROVIDER_KEY = 'sortownia_legacy'
 export const ENTITY_TOPOLOGY = 'sortownia.topology'
 export const ENTITY_FRACTIONS = 'sortownia.fractions'
 export const ENTITY_MOVEMENTS = 'sortownia.movements'
+export const ENTITY_CUSTOMERS = 'sortownia.customers'
+export const ENTITY_SALES_ORDERS = 'sortownia.salesOrders'
 
 type Container = Awaited<ReturnType<typeof createRequestContainer>>
 
@@ -144,6 +152,27 @@ const MAPPINGS: Record<string, DataMapping> = {
       { externalField: 'kategoria', localField: 'metadata.kategoria', mappingKind: 'metadata' },
     ],
   },
+  [ENTITY_CUSTOMERS]: {
+    entityType: ENTITY_CUSTOMERS,
+    matchStrategy: 'externalId',
+    fields: [
+      { externalField: 'debtorno', localField: 'source', mappingKind: 'external_id', required: true, dedupeRole: 'primary' },
+      { externalField: 'name', localField: 'displayName', mappingKind: 'core', required: true },
+      { externalField: 'nip', localField: 'description', mappingKind: 'core' },
+      { externalField: 'typ', localField: 'metadata.rola', mappingKind: 'metadata' },
+    ],
+  },
+  [ENTITY_SALES_ORDERS]: {
+    entityType: ENTITY_SALES_ORDERS,
+    matchStrategy: 'externalId',
+    fields: [
+      { externalField: 'orderno', localField: 'externalReference', mappingKind: 'external_id', required: true, dedupeRole: 'primary' },
+      { externalField: 'debtorno', localField: 'customerEntityId', mappingKind: 'relation', required: true },
+      { externalField: 'stockid', localField: 'lines.productVariantId', mappingKind: 'relation', required: true },
+      { externalField: 'ilosc_kg', localField: 'lines.quantity', mappingKind: 'core', required: true },
+      { externalField: 'cena_kg', localField: 'lines.unitPriceNet', mappingKind: 'core', required: true },
+    ],
+  },
   [ENTITY_MOVEMENTS]: {
     entityType: ENTITY_MOVEMENTS,
     matchStrategy: 'externalId',
@@ -159,7 +188,15 @@ const MAPPINGS: Record<string, DataMapping> = {
 export const sortowniaLegacyAdapter: DataSyncAdapter = {
   providerKey: PROVIDER_KEY,
   direction: 'import',
-  supportedEntities: [ENTITY_TOPOLOGY, ENTITY_FRACTIONS, ENTITY_MOVEMENTS],
+  supportedEntities: [
+    ENTITY_TOPOLOGY,
+    ENTITY_FRACTIONS,
+    // Kolejność nie jest kosmetyczna: zamówienie potrzebuje kontrahenta
+    // i frakcji, a ruch WZ potrzebuje zamówienia, żeby je wskazać.
+    ENTITY_CUSTOMERS,
+    ENTITY_SALES_ORDERS,
+    ENTITY_MOVEMENTS,
+  ],
   runMode: 'generic',
   runParameters: [
     {
@@ -275,6 +312,91 @@ export const sortowniaLegacyAdapter: DataSyncAdapter = {
       return
     }
 
+    if (input.entityType === ENTITY_CUSTOMERS) {
+      const file = customersFile()
+      if (!(await fileExists(file))) {
+        throw new Error(`Brak listy kontrahentów w zrzucie: ${file}`)
+      }
+      const rows = await readCustomers(file)
+      const items: ImportItem[] = rows.map((row) => ({
+        externalId: row.debtorno,
+        data: row as unknown as Record<string, unknown>,
+        action: 'update',
+      }))
+
+      let created = 0
+      if (!dryRun) {
+        const result = await ensureCustomers(
+          {
+            em,
+            commandBus: container.resolve('commandBus') as CommandBus,
+            commandContext: buildCommandContext(container, scope),
+            scope,
+          },
+          rows,
+        )
+        created = result.outcomes.filter((outcome) => outcome.action === 'create').length
+      }
+
+      yield {
+        items,
+        cursor: JSON.stringify({ customersSyncedAt: new Date().toISOString() }),
+        hasMore: false,
+        totalEstimate: rows.length,
+        processedCount: rows.length,
+        batchIndex: 0,
+        message: dryRun
+          ? `Przebieg próbny: ${rows.length} kontrahentów w zrzucie.`
+          : `Zsynchronizowano kontrahentów: ${rows.length} pozycji (nowych ${created}).`,
+      }
+      return
+    }
+
+    if (input.entityType === ENTITY_SALES_ORDERS) {
+      const file = ordersFile()
+      if (!(await fileExists(file))) {
+        throw new Error(`Brak zamówień w zrzucie: ${file}`)
+      }
+      const rows = await readOrders(file)
+      const items: ImportItem[] = rows.map((row) => ({
+        externalId: String(row.orderno),
+        data: row as unknown as Record<string, unknown>,
+        action: 'update',
+      }))
+
+      let created = 0
+      let invoiced = 0
+      if (!dryRun) {
+        const result = await applySalesOrders(
+          {
+            em,
+            commandBus: container.resolve('commandBus') as CommandBus,
+            commandContext: buildCommandContext(container, scope),
+            scope,
+            customers: await loadCustomerIndex(em, scope),
+            fractions: await loadFractionIndex(em, scope),
+            issueInvoices: true,
+          },
+          rows,
+        )
+        created = result.outcomes.filter((outcome) => outcome.action === 'create').length
+        invoiced = result.outcomes.filter((outcome) => outcome.invoiced).length
+      }
+
+      yield {
+        items,
+        cursor: JSON.stringify({ salesOrdersSyncedAt: new Date().toISOString() }),
+        hasMore: false,
+        totalEstimate: rows.length,
+        processedCount: rows.length,
+        batchIndex: 0,
+        message: dryRun
+          ? `Przebieg próbny: ${rows.length} zamówień w zrzucie.`
+          : `Zsynchronizowano zamówienia: ${rows.length} pozycji (nowych ${created}, faktur ${invoiced}).`,
+      }
+      return
+    }
+
     if (input.entityType !== ENTITY_MOVEMENTS) {
       throw new Error(`Nieobsługiwany typ encji: ${input.entityType}`)
     }
@@ -294,6 +416,7 @@ export const sortowniaLegacyAdapter: DataSyncAdapter = {
       em,
       commandBus,
       commandContext: buildCommandContext(container, scope),
+      salesOrders: await loadSalesOrderIndex(em, scope),
       scope,
       warehouseId: warehouse.id,
       locations: byCode,

@@ -145,7 +145,7 @@ def find_drop(wsad_dir: pathlib.Path, stem: str) -> pathlib.Path:
 # Zapis wynikow
 # --------------------------------------------------------------------------- #
 
-MOVES_HEADER = ["stkmoveno", "stockid", "typ", "loccode", "data", "debtorno", "ilosc_kg", "ilosc_mg"]
+MOVES_HEADER = ["stkmoveno", "stockid", "typ", "loccode", "data", "debtorno", "ilosc_kg", "ilosc_mg", "orderno"]
 
 
 def write_csv(path: pathlib.Path, header: list[str], rows: list[list]) -> None:
@@ -208,9 +208,10 @@ def sync(url: str, out_dir: pathlib.Path, user: str, password: str, company: str
             client.log(f"  UWAGA: GetCustomer({debtorno}) -> brak rekordu (-2), pomijam")
             continue
         customer_rows.append([record["debtorno"], record["name"], record["debtortype"],
-                              record["address2"], record["currcode"], record["clientsince"]])
+                              record["address2"], record["currcode"], record["clientsince"],
+                              record.get("taxref", "")])
     write_csv(out_dir / "kontrahenci.csv",
-              ["debtorno", "name", "typ", "miasto", "waluta", "klient_od"], customer_rows)
+              ["debtorno", "name", "typ", "miasto", "waluta", "klient_od", "nip"], customer_rows)
 
     # --- frakcje: w calosci ze zrzutu (webERP nie wystawia katalogu) ---------
     stocks = read_table(find_drop(wsad_dir, "frakcje"))
@@ -238,14 +239,23 @@ def sync(url: str, out_dir: pathlib.Path, user: str, password: str, company: str
             balance_rows.append([stock["stockid"], loc["loccode"], round(qty, 2), kg_to_mg(qty)])
     write_csv(out_dir / "stany.csv", ["stockid", "loccode", "ilosc_kg", "ilosc_mg"], balance_rows)
 
-    # --- kontrola metody GetSalesOrderHeader ---------------------------------
-    # Nie zasila CSV, ale jest czescia kontraktu webERP - odpytujemy ja, zeby
-    # rozjazd API ujawnil sie tutaj, a nie na scenie.
-    order = client.sales_order_header(FIRST_ORDER_NO)
-    if isinstance(order, dict):
-        client.log(f"GetSalesOrderHeader({FIRST_ORDER_NO}) -> {order['debtorno']} / {order['stockid']}")
-    else:
-        client.log(f"GetSalesOrderHeader({FIRST_ORDER_NO}) -> brak zamowienia (kod {order})")
+    # --- zamowienia: klucze ze zrzutu, naglowki przez GetSalesOrderHeader ----
+    # Ten sam uklad co przy kontrahentach: plik daje liste numerow, wartosci
+    # przychodza metoda, ktora webERP naprawde wystawia.
+    order_keys = read_table(find_drop(wsad_dir, "zamowienia"))
+    order_rows = []
+    for key in order_keys:
+        header = client.sales_order_header(int(key["orderno"]))
+        if header == NOT_FOUND:
+            client.log(f"  UWAGA: GetSalesOrderHeader({key['orderno']}) -> brak rekordu (-2), pomijam")
+            continue
+        qty = float(header["qty"])
+        order_rows.append([header["orderno"], header["debtorno"], header["orddate"],
+                           header["deliverydate"], header["stockid"], round(qty, 2),
+                           kg_to_mg(qty), header["unitprice"]])
+    write_csv(out_dir / "zamowienia.csv",
+              ["orderno", "debtorno", "data_zamowienia", "data_wydania", "stockid",
+               "ilosc_kg", "ilosc_mg", "cena_kg"], order_rows)
 
     client.close()
 
@@ -257,7 +267,7 @@ def sync(url: str, out_dir: pathlib.Path, user: str, password: str, company: str
     fresh = [m for m in moves if str(m["stkmoveno"]) not in known]
     append_moves(moves_file, [
         [m["stkmoveno"], m["stockid"], m["type"], m["loccode"], m["trandate"], m["debtorno"],
-         round(float(m["qty"]), 2), kg_to_mg(m["qty"])]
+         round(float(m["qty"]), 2), kg_to_mg(m["qty"]), m.get("orderno", "")]
         for m in fresh
     ])
 
@@ -273,6 +283,7 @@ def sync(url: str, out_dir: pathlib.Path, user: str, password: str, company: str
 
     stats = {
         "kontrahenci": len(customer_rows),
+        "zamowienia": len(order_rows),
         "frakcje": len(stocks),
         "lokalizacje": len(location_rows),
         "stany": len(balance_rows),

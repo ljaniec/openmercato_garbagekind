@@ -21,6 +21,29 @@ export type LegacyMovementRow = {
   debtorno: string
   iloscKg: number
   iloscMg: number
+  /** Numer zamówienia, które to wydanie realizuje; 0 dla PZ i SORT. */
+  orderno: number
+}
+
+export type LegacyCustomerRow = {
+  debtorno: string
+  nazwa: string
+  /** DOS = dostawca odpadu, ODB = odbiorca frakcji. */
+  typ: string
+  miasto: string
+  waluta: string
+  klientOd: string
+  nip: string
+}
+
+export type LegacyOrderRow = {
+  orderno: number
+  debtorno: string
+  dataZamowienia: string
+  dataWydania: string
+  stockid: string
+  iloscKg: number
+  cenaKg: number
 }
 
 export type LegacyFractionRow = {
@@ -116,6 +139,14 @@ export function fractionsFile(): string {
   return path.join(legacyOutDir(), 'frakcje.csv')
 }
 
+export function customersFile(): string {
+  return path.join(legacyOutDir(), 'kontrahenci.csv')
+}
+
+export function ordersFile(): string {
+  return path.join(legacyOutDir(), 'zamowienia.csv')
+}
+
 export async function* readMovements(filePath: string): AsyncGenerator<LegacyMovementRow> {
   for await (const row of readCsvRows(filePath)) {
     const stkmoveno = Number.parseInt(row.stkmoveno ?? '', 10)
@@ -131,8 +162,48 @@ export async function* readMovements(filePath: string): AsyncGenerator<LegacyMov
       debtorno: row.debtorno ?? '',
       iloscKg: toNumber(row.ilosc_kg),
       iloscMg: toNumber(row.ilosc_mg),
+      // Kolumna bywa pusta (PZ, SORT) — `toNumber` daje wtedy 0, czyli „brak".
+      orderno: toNumber(row.orderno),
     }
   }
+}
+
+export async function readCustomers(filePath: string): Promise<LegacyCustomerRow[]> {
+  const out: LegacyCustomerRow[] = []
+  for await (const row of readCsvRows(filePath)) {
+    if (!row.debtorno) continue
+    out.push({
+      debtorno: row.debtorno,
+      // Ta sama pułapka co przy frakcjach: pusta komórka nie może zostać pustą
+      // nazwą, bo `displayName` kontrahenta jest wymagane.
+      nazwa: row.name?.trim() ? row.name.trim() : row.debtorno,
+      typ: (row.typ ?? '').toUpperCase(),
+      miasto: row.miasto ?? '',
+      waluta: (row.waluta ?? 'PLN').toUpperCase(),
+      klientOd: row.klient_od ?? '',
+      nip: row.nip ?? '',
+    })
+  }
+  return out
+}
+
+export async function readOrders(filePath: string): Promise<LegacyOrderRow[]> {
+  const out: LegacyOrderRow[] = []
+  for await (const row of readCsvRows(filePath)) {
+    const orderno = Number.parseInt(row.orderno ?? '', 10)
+    if (!Number.isFinite(orderno)) continue
+    if (!row.stockid || !row.debtorno) continue
+    out.push({
+      orderno,
+      debtorno: row.debtorno,
+      dataZamowienia: row.data_zamowienia ?? '',
+      dataWydania: row.data_wydania ?? '',
+      stockid: row.stockid,
+      iloscKg: toNumber(row.ilosc_kg),
+      cenaKg: toNumber(row.cena_kg),
+    })
+  }
+  return out
 }
 
 export async function readFractions(filePath: string): Promise<LegacyFractionRow[]> {

@@ -10,12 +10,18 @@ import { resolveCredentials } from './lib/adapter'
 import {
   fileExists,
   fractionsFile,
+  customersFile,
+  ordersFile,
   movementsFile,
   readFractions,
+  readCustomers,
+  readOrders,
   readMovements,
   type LegacyMovementRow,
 } from './lib/legacyFiles'
+import { ensureCustomers } from './lib/customers'
 import { ensureFractions, loadFractionIndex } from './lib/fractions'
+import { applySalesOrders } from './lib/salesOrders'
 import { applyMovementBatch, type MovementContext } from './lib/movements'
 import { ensureTopology, loadLocationIndex } from './lib/topology'
 
@@ -107,7 +113,51 @@ const importCommand: ModuleCli = {
     const fractionResult = await ensureFractions(em, scope, fractions)
     console.log(`  frakcje: ${fractions.length} pozycji (nowych ${fractionResult.created})`)
 
-    // 3. Księga ruchów — kanał plikowy, zapis przez komendy WMS.
+    // 3. Kontrahenci — do modułu klientów, komendą CRM.
+    const commandBus = container.resolve('commandBus') as CommandBus
+    const commandContext = buildCommandContext(container, scope)
+    const customersPath = customersFile()
+    let customerIndex = new Map<string, string>()
+    if (await fileExists(customersPath)) {
+      const rows = await readCustomers(customersPath)
+      const result = await ensureCustomers({ em, commandBus, commandContext, scope }, rows)
+      customerIndex = result.index
+      const created = result.outcomes.filter((o) => o.action === 'create').length
+      const failedCustomers = result.outcomes.filter((o) => o.action === 'failed')
+      console.log(`  kontrahenci: ${rows.length} pozycji (nowych ${created}, istniejących ${result.outcomes.length - created - failedCustomers.length})`)
+      for (const outcome of failedCustomers) console.log(`    ! ${outcome.debtorno}: ${outcome.error}`)
+    } else {
+      console.log(`  kontrahenci: pominięto (brak ${customersPath})`)
+    }
+
+    // 4. Zamówienia sprzedaży i faktury — komendami modułu sprzedaży.
+    const ordersPath = ordersFile()
+    let salesOrderIndex = new Map<number, string>()
+    if (await fileExists(ordersPath) && customerIndex.size > 0) {
+      const rows = await readOrders(ordersPath)
+      const result = await applySalesOrders(
+        {
+          em,
+          commandBus,
+          commandContext,
+          scope,
+          customers: customerIndex,
+          fractions: await loadFractionIndex(em, scope),
+          issueInvoices: args.faktury !== false && args['bez-faktur'] !== true,
+        },
+        rows,
+      )
+      salesOrderIndex = result.index
+      const created = result.outcomes.filter((o) => o.action === 'create').length
+      const invoiced = result.outcomes.filter((o) => o.invoiced).length
+      const failedOrders = result.outcomes.filter((o) => o.action === 'failed')
+      console.log(`  zamówienia: ${rows.length} pozycji (nowych ${created}, faktur ${invoiced}, istniejących ${result.outcomes.length - created - failedOrders.length})`)
+      for (const outcome of failedOrders.slice(0, 10)) console.log(`    ! zamówienie ${outcome.orderno}: ${outcome.error}`)
+    } else {
+      console.log(`  zamówienia: pominięto (brak pliku albo kontrahentów)`)
+    }
+
+    // 5. Księga ruchów — kanał plikowy, zapis przez komendy WMS.
     const movementsPath = movementsFile()
     if (!(await fileExists(movementsPath))) throw new Error(`Brak księgi ruchów: ${movementsPath}`)
 
@@ -119,13 +169,14 @@ const importCommand: ModuleCli = {
 
     const movementContext: MovementContext = {
       em,
-      commandBus: container.resolve('commandBus') as CommandBus,
-      commandContext: buildCommandContext(container, scope),
+      commandBus,
+      commandContext,
       scope,
       warehouseId: warehouse.id,
       locations: byCode,
       fractions: await loadFractionIndex(em, scope),
       performedBy: operator.id,
+      salesOrders: salesOrderIndex,
     }
 
     let buffer: LegacyMovementRow[] = []

@@ -25,6 +25,7 @@ export const integrationMeta = {
 
 const LEGACY_OUT = process.env.SORTOWNIA_LEGACY_OUT ?? '/home/user/openmercato_garbagekind/out'
 const MOVEMENTS_CSV = path.join(LEGACY_OUT, 'ruchy.csv')
+const ORDERS_CSV = path.join(LEGACY_OUT, 'zamowienia.csv')
 const TOLERANCE_KG = 0.05
 
 type LegacyRow = {
@@ -36,11 +37,26 @@ type LegacyRow = {
   iloscMg: number
 }
 
+type LegacyOrder = {
+  orderno: number
+  debtorno: string
+  stockid: string
+  iloscKg: number
+  cenaKg: number
+}
+
 type DashboardPayload = {
   totals: { yardKg: number; binsKg: number; movements30d: number }
   locations: Array<{ code: string; type: string; quantityKg: number | null; capacityKg: number | null; utilisation: number | null }>
   fractions: Array<{ sku: string; quantityKg: number }>
   movements: Array<{ type: string; legacyMoveNo: number | string | null }>
+  sales?: {
+    orders: number
+    invoices: number
+    netPln: number
+    grossPln: number
+    topBuyers: Array<{ nazwa: string; netPln: number; orders: number }>
+  }
 }
 
 function splitCsvLine(line: string): string[] {
@@ -96,6 +112,36 @@ async function readLegacyLedger(): Promise<LegacyRow[]> {
       loccode: (record.loccode ?? '').toUpperCase(),
       iloscKg: Number.parseFloat((record.ilosc_kg ?? '0').replace(',', '.')),
       iloscMg: Number.parseFloat((record.ilosc_mg ?? '0').replace(',', '.')),
+    })
+  }
+  return rows
+}
+
+async function readLegacyOrders(): Promise<LegacyOrder[]> {
+  const rows: LegacyOrder[] = []
+  const stream = createReadStream(ORDERS_CSV, { encoding: 'utf8' })
+  const lines = createInterface({ input: stream, crlfDelay: Infinity })
+  let header: string[] | null = null
+  for await (const rawLine of lines) {
+    const line = rawLine.replace(/^﻿/, '')
+    if (!line.trim()) continue
+    const cells = splitCsvLine(line)
+    if (!header) {
+      header = cells.map((cell) => cell.trim())
+      continue
+    }
+    const record: Record<string, string> = {}
+    header.forEach((name, index) => {
+      record[name] = (cells[index] ?? '').trim()
+    })
+    const orderno = Number.parseInt(record.orderno ?? '', 10)
+    if (!Number.isFinite(orderno)) continue
+    rows.push({
+      orderno,
+      debtorno: record.debtorno ?? '',
+      stockid: record.stockid ?? '',
+      iloscKg: Number.parseFloat((record.ilosc_kg ?? '0').replace(',', '.')),
+      cenaKg: Number.parseFloat((record.cena_kg ?? '0').replace(',', '.')),
     })
   }
   return rows
@@ -230,6 +276,47 @@ test.describe('TC-SORT-001 — zgodność Open Mercato z księgą systemu legacy
     const transfer = dashboard.movements.find((movement) => movement.type === 'transfer')
     if (transfer) {
       expect(String(transfer.legacyMoveNo)).toMatch(/^\d+ \+ \d+$/)
+    }
+  })
+
+  test('każde wydanie ze starego systemu ma swoje zamówienie sprzedaży', async ({ request }) => {
+    const orders = await readLegacyOrders()
+    const dashboard = await loadDashboard(request)
+    expect(dashboard.sales, 'pulpit musi raportować sprzedaż').toBeDefined()
+    expect(dashboard.sales?.orders).toBe(orders.length)
+  })
+
+  test('każde zamówienie jest zafakturowane — faktura bez zamówienia jest bezwartościowa', async ({ request }) => {
+    const dashboard = await loadDashboard(request)
+    expect(dashboard.sales?.invoices).toBe(dashboard.sales?.orders)
+  })
+
+  test('przychód zgadza się z cennikiem starego systemu co do grosza', async ({ request }) => {
+    const orders = await readLegacyOrders()
+    const dashboard = await loadDashboard(request)
+    // Każdy wiersz legacy to ilość w kilogramach razy cena za kilogram.
+    // Gdyby cena trafiła do dokumentu jako cena za całe wydanie albo ilość
+    // poszła w tonach, ta suma rozjechałaby się o rzędy wielkości.
+    const expectedNet = orders.reduce((sum, row) => sum + row.iloscKg * row.cenaKg, 0)
+    expect(dashboard.sales?.netPln ?? 0).toBeCloseTo(expectedNet, 1)
+  })
+
+  test('kwota brutto to netto powiększone o stawkę VAT, a nie liczba wzięta znikąd', async ({ request }) => {
+    const dashboard = await loadDashboard(request)
+    const net = dashboard.sales?.netPln ?? 0
+    const gross = dashboard.sales?.grossPln ?? 0
+    expect(gross).toBeCloseTo(net * 1.23, 0)
+  })
+
+  test('nazwy odbiorców są czytelne, a nie kryptogramem z bazy', async ({ request }) => {
+    const dashboard = await loadDashboard(request)
+    const buyers = dashboard.sales?.topBuyers ?? []
+    expect(buyers.length).toBeGreaterThan(0)
+    for (const buyer of buyers) {
+      // Pola tekstowe kontrahenta są szyfrowane w spoczynku. Odczyt surowym
+      // SQL-em oddaje ciąg w rodzaju `BZhh3D8l...:v1` i ląduje on na ekranie.
+      expect.soft(buyer.nazwa, 'nazwa odbiorcy wygląda na kryptogram').not.toMatch(/:v\d+$/)
+      expect.soft(buyer.nazwa.length, `nazwa odbiorcy: ${buyer.nazwa}`).toBeLessThan(80)
     }
   })
 

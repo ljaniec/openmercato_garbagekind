@@ -19,7 +19,8 @@ CREATE TABLE debtorsmaster (
     debtortype   TEXT NOT NULL,   -- DOS = dostawca, ODB = odbiorca
     currcode     TEXT NOT NULL,
     clientsince  TEXT NOT NULL,   -- YYYY-MM-DD
-    creditlimit  REAL NOT NULL
+    creditlimit  REAL NOT NULL,
+    taxref       TEXT NOT NULL DEFAULT ''  -- NIP; w webERP tez nazywa sie taxref
 );
 
 -- Frakcje odpadow jako pozycje magazynowe.
@@ -59,7 +60,8 @@ CREATE TABLE stockmoves (
     trandate     TEXT NOT NULL,    -- ISO 8601, sekundowa rozdzielczosc
     debtorno     TEXT,             -- NULL dla ruchow wewnetrznych (SORT)
     qty          REAL NOT NULL,    -- kg; WZ jest ujemne (konwencja webERP)
-    standardcost REAL NOT NULL
+    standardcost REAL NOT NULL,
+    orderno      INTEGER           -- WZ wskazuje zamowienie; NULL dla PZ i SORT
 );
 CREATE INDEX idx_stockmoves_trandate ON stockmoves(trandate);
 
