@@ -1,4 +1,49 @@
-# Prymitywny system legacy sortowni
+# Sortownia → Physical AI
+
+Repozytorium prowadzone etapami, każdy na własnej gałęzi. **Ta gałąź to
+`physical_ai`** i zawiera wszystko z etapów wcześniejszych plus warstwę
+robotyczną.
+
+| Gałąź | Co zawiera | Stan |
+| --- | --- | --- |
+| `claude/quirky-hypatia-1afn6m` | serwer XML-RPC w dialekcie webERP + klient CSV | zamknięta |
+| `legacy_erp` | generator danych legacy, saldo magazynu liczone z księgi | zamknięta |
+| `mercato_erp` | moduł `sortownia`: pełna ścieżka ERP na Open Mercato | zamknięta |
+| **`physical_ai`** | osiem modułów robotycznych + kafelek embodimentu | **bieżąca** |
+
+## Mapa tej gałęzi
+
+| Ścieżka | Co tam jest |
+| --- | --- |
+| [`physical-ai/README.md`](physical-ai/README.md) | teza, warunki brzegowe, konsekwencja regulacyjna, stan implementacji i **dowody wszystkich faz** |
+| [`physical-ai/ROADMAP.md`](physical-ai/ROADMAP.md) | mapa faz 0–6: co dostarcza, czego świadomie nie ma, co jest dowodem zamknięcia |
+| [`physical-ai/EMBODIMENTS.md`](physical-ai/EMBODIMENTS.md) | format opisu ramienia, SO-101 jako wzorzec i **cztery usterki, które ujawnił** |
+| `mercato/modules/` | dziewięć modułów Open Mercato (`sortownia` + osiem robotycznych) |
+| `mercato/embodiments/` | opisy ramion; `so101_follower.json` z dokumentacji LeRobot |
+| `legacy/`, `client/`, `webui/` | system legacy z etapów wcześniejszych — opisany niżej |
+
+### Uczciwa etykieta całości
+
+Warstwa robotyczna **nie widziała dotąd żadnego prawdziwego robota**. Wszystkie
+dane pochodzą z naszych własnych komend `seed` i `prove`. To jest wykonywalny
+dokument projektowy z odtwarzalnymi dowodami zachowania, a nie oprogramowanie
+sprawdzone w ruchu. Pełna ocena wartości i lista tego, czego brakuje, jest
+w `physical-ai/EMBODIMENTS.md` oraz w sekcji „Stan po fazach 0–6".
+
+### Uruchomienie warstwy robotycznej
+
+```bash
+./mercato/install.sh                     # wszystkie moduły do klonu Open Mercato
+cd /sciezka/do/open-mercato/apps/mercato
+yarn generate && yarn mercato db migrate
+yarn mercato auth sync-role-acls
+yarn mercato fleet seed
+yarn mercato fleet embodiment --file .../mercato/embodiments/so101_follower.json
+```
+
+---
+
+# Prymitywny system legacy sortowni (etapy wcześniejsze)
 
 Wiarygodne źródło danych „sprzed epoki”, z którego Open Mercato zasysa dane przez
 XML-RPC — bez instalowania prawdziwego webERP w środku hackatonu.
