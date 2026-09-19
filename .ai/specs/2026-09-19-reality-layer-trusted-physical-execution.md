@@ -134,6 +134,546 @@ MVP includes only semantic move-object intent, deterministic gate checks, scoped
 
 MVP explicitly excludes: trajectory planning, ROS graph modeling, MoveIt/Nav2/OpenRMF, digital twin, Gazebo/Isaac Sim, generic robotics ontology, fleet optimization, VLM training, policy learning, multi-robot planning, blockchain, and a full vendor-neutral protocol.
 
+## A. Executive summary
+
+Reality Layer adds one capability to Open Mercato: trustworthy lifecycle management for semantic operations whose effects occur outside the database. The module deliberately does not become a robot controller. It records what business outcome was requested, whether that request is authorized for a particular executor, what execution attempt occurred, what independent observations claim happened, and what business-state change is proposed as a result.
+
+The key safety boundary is a two-stage commit in the semantic—not database—sense:
+
+1. **authorize and execute a physical task**;
+2. **independently reconcile observed reality into business truth**.
+
+The first stage may change the physical world and cannot be rolled back transactionally. The second stage is an ordinary Open Mercato domain mutation and therefore uses the existing command/audit mechanism. A successful physical execution can exist indefinitely without an ERP mutation; a failed execution can still produce evidence and a proposed diff if something physically changed.
+
+For HackOn, the business effect adapter is the existing WMS command \`wms.inventory.move\`. The source branch already contains \`fleet\`, \`edge\`, \`safety\`, \`vision\`, and \`work_orders\` concepts that can enrich future gate/evidence adapters, but Reality Layer does not depend on them for its core semantics.
+
+## B. Repository findings
+
+### B.1 Open Mercato framework findings
+
+| Component | Concrete source | Current behavior | Decision |
+|---|---|---|---|
+| Module discovery | \`.ai/docs/module-development.md\`, \`packages/cli/src/lib/generators/module-registry.ts\` | Discovers module convention files and app-local modules | **Reuse** |
+| API convention | \`apps/mercato/src/modules/example/api/todos/route.ts\` | \`route.ts\` files export per-method \`metadata\` and \`openApi\`; CRUD factory owns normal CRUD | **Reuse exactly** |
+| Custom writes | \`packages/core/AGENTS.md\`, \`@open-mercato/shared/lib/crud/route-mutation-guard\` | Non-CRUD action routes run mutation guards before writes | **Reuse exactly** |
+| Command registry/bus | \`packages/shared/src/lib/commands/{registry,types,command-bus}.ts\` | Registered commands execute under scoped context and persist \`ActionLog\` metadata/snapshots | **Reuse exactly** |
+| Audit | \`packages/core/src/modules/audit_logs/data/entities.ts\` | \`ActionLog\` records actor, on-behalf-of actor, resource links, command payload/snapshots/context | **Reuse; do not invent a parallel audit log** |
+| Events | \`packages/events/AGENTS.md\`, \`createModuleEvents()\` | Typed module events; persistent delivery is at-least-once | **Reuse; subscribers idempotent** |
+| Queue/workers | \`packages/queue/AGENTS.md\`, \`apps/docs/docs/framework/runtime/workers.mdx\` | Retriable background jobs, auto-discovered workers, abandoned-job callback | **Use for physical dispatch** |
+| Module runtime | \`.ai/specs/SPEC-072-2026-09-11-module-runtime-start-hook.md\` | Process-wide long-lived runtime | **Avoid for per-intent execution** |
+| Workflows | \`packages/core/src/modules/workflows/AGENTS.md\` | USER_TASK, WAIT_FOR_SIGNAL, command-backed activities | **Optional orchestration only** |
+| AI pending actions | \`packages/ai-assistant/src/modules/ai_assistant/lib/prepare-mutation.ts\`, \`pending-action-types.ts\` | AI write calls become TTL-scoped pending mutations with diff/idempotency/stale recheck | **Reuse for AI-created intents; not physical grants** |
+| Agent Orchestrator | \`packages/enterprise/src/modules/agent_orchestrator/AGENTS.md\` | Agent is propose-only; disposition then effector then command; agent identity is audited | **Optional origin only** |
+| Agent identity | \`packages/core/src/modules/auth/data/entities.ts\`, \`packages/shared/src/lib/commands/types.ts\` | \`User.kind\` distinguishes human/agent/service; \`runAs\` carries agent→human attribution | **Reuse for no-self-authorization checks** |
+| WMS transfer | \`packages/core/src/modules/wms/commands/inventory-actions.ts\` | \`wms.inventory.move\` is audited, non-generic-undo, and idempotent by movement reference + facts | **Reuse for MVP business effect** |
+| UI | \`packages/ui/AGENTS.md\` | DataTable, apiCall, useGuardedMutation, shared status/audit primitives | **Reuse; no bespoke UI framework** |
+| Integration tests | \`.ai/qa/AGENTS.md\` | Module-local Playwright integration tests; shared auth/API helpers | **Reuse** |
+
+### B.2 Findings in this repository's \`physical_ai\` branch
+
+| Component | Concrete source | What it currently represents | Reality Layer treatment |
+|---|---|---|---|
+| Physical-AI framing | \`physical-ai/README.md\` | Business/control-plane framing around robot deployments and auditability | **Align** |
+| Robot/cell registry | \`mercato/modules/fleet/data/entities.ts\`, \`lib/embodimentSpec.ts\` | Robot, cell, embodiment/calibration facts | **Optional gate adapter**; never define executor = robot |
+| Edge identity/liveness | \`mercato/modules/edge/data/entities.ts\`, \`lib/liveness.ts\`, \`api/connect/route.ts\` | Machine/edge-agent identity and liveness | **Optional executor-credential provider** |
+| Deterministic safety | \`mercato/modules/safety/lib/clearance.ts\`, \`data/entities.ts\` | Deployment/safety-case clearance | **Optional policy input**, not per-intent approval |
+| Vision | \`mercato/modules/vision/data/entities.ts\`, \`lib/lawful.ts\`, \`lib/triangulate.ts\` | Camera/detector/detection artifacts | **Potential evidence source**, not generic evidence storage |
+| Work order accounting | \`mercato/modules/work_orders/lib/reconcile.ts\`, \`commands/workOrders.ts\` | Compares robot piece claims with scale mass; batch close may directly receive inventory | **Keep separate** from RealityDiff |
+| Installer | \`mercato/install.sh\` | Copies custom modules to \`apps/mercato/src/modules\`, updates enabled modules, runs generation | **Add \`reality_layer\` to same path** |
+| Existing custom APIs | e.g. \`mercato/modules/fleet/api/robots/route.ts\` | Hackathon action/list APIs | **Do not copy blindly**: new routes must include current \`openApi\` exports and mutation guards |
+
+### B.3 Specific incompatibilities/debt found
+
+1. The hackathon branch does not contain Open Mercato framework sources/docs, so framework APIs must be pinned to the inspected upstream SHA above.
+2. Several existing custom physical-AI routes predate/currently omit the complete OpenAPI surface expected by the current Open Mercato example. Reality Layer routes must export \`openApi\`; no directory-layout migration is required.
+3. The existing \`work_orders.Reconciliation\` is a domain-specific mass/piece accounting record, not a general observation-to-business-state diff. Reusing it would create semantic coupling and unsafe automatic writes.
+4. Existing safety clearance is about deployment/safety-case status, not a narrowly scoped authority for a particular physical operation. It cannot substitute for an \`AuthorizationGrant\`.
+5. Existing edge credentials are machine credentials. They must not be converted into human role grants, and human RBAC must not be treated as proof that a machine is authenticated.
+
+## C. Architectural decision
+
+### C.1 Module ownership
+
+\`reality_layer\` owns:
+
+- semantic physical intent lifecycle;
+- deterministic gate evaluation;
+- narrowly scoped physical authorization grants;
+- executor abstraction/registry;
+- execution-attempt ledger;
+- evidence envelopes;
+- RealityDiff lifecycle;
+- reconciliation orchestration and provenance.
+
+It does **not** own:
+
+- WMS inventory truth;
+- work-order truth;
+- robot registry truth;
+- machine credentials outside its adapter contract;
+- safety case truth;
+- camera/VLM models;
+- trajectories/controllers.
+
+Cross-module business effects are invoked through registered commands. Optional module facts are consumed through adapters/services or events, never direct ORM relationships.
+
+### C.2 Why physical execution is not an Agent Orchestrator effector
+
+An Agent Orchestrator effector is the boundary that converts an approved agent proposal into an Open Mercato command. Physical execution has additional semantics: delayed start, independent machine credential state, external side effects, retries, disconnection, late completion and evidence. Therefore:
+
+\`\`\`text
+agent proposal
+  -> disposition
+  -> AO effector
+  -> reality_layer.intent.create command
+  -> Reality Gate / human grant / queue
+  -> physical executor
+\`\`\`
+
+The AO effector stops at intent creation. It never invokes \`PhysicalExecutor.execute()\`.
+
+### C.3 Why a queue worker is the execution boundary
+
+The Open Mercato queue contract already supplies:
+
+- asynchronous execution;
+- retry delivery;
+- explicit requirement for idempotent handlers;
+- local strategy for development/demo;
+- BullMQ strategy for production;
+- \`onJobAbandoned\` for failures that occur before handler entry.
+
+This matches physical dispatch better than an HTTP request, workflow activity held open for minutes, or \`runtime.ts\`. The authoritative execution attempt exists in the database before enqueue; a queue job references it by ID.
+
+### C.4 Why RealityDiff is separate from AI mutation previews
+
+\`AiPendingAction.fieldDiff\` is a preview of a proposed **database mutation** before that mutation occurs. \`RealityDiff\` is a durable claim about a discrepancy between authoritative business state and observed physical state **after an external operation or observation**. They have opposite temporal semantics. They may look similar in UI but cannot share the same persistence model.
+
+### C.5 Why there is no generic rollback
+
+Physical execution cannot be transactionally undone. Existing WMS inventory commands follow the same principle: movement commands are non-generic-undo and reversal is a new audited counter-action. Reality Layer therefore records compensation as a future semantic request, never a database rollback of the physical action.
+
+## D. Domain model
+
+The MVP persists **five entities**. Candidate concepts that do not need durable identity remain value objects/services.
+
+### D.1 \`PhysicalIntent\` — persistent entity
+
+Purpose: immutable semantic request fields plus controlled lifecycle/provenance.
+
+Key fields:
+
+| Field | Shape / rule |
+|---|---|
+| \`id\` | UUID |
+| \`tenantId\`, \`organizationId\` | required indexed scope |
+| \`kind\` | MVP literal \`move_object\`; additive enum later |
+| \`subjectKind\`, \`subjectId\` | semantic target; IDs only |
+| \`sourceKind\`, \`sourceId\` | nullable semantic source |
+| \`destinationKind\`, \`destinationId\` | required |
+| \`contextKind\`, \`contextId\` | optional work-order/etc. reference |
+| \`parametersJson\` | bounded typed payload; for WMS demo includes warehouse/catalog variant/quantity/lot/serial as needed |
+| \`status\` | state machine below |
+| \`originatorUserId\` | nullable FK ID to auth User; no ORM relation |
+| \`originatorKind\` | \`human|agent|service|ai_tool\` snapshot |
+| \`originContextJson\` | bounded IDs such as agent run/proposal/workflow/conversation/pending-action; never arbitrary prompt text |
+| \`selectedExecutorId\` | nullable runtime executor identifier |
+| \`latestGateJson\` | bounded latest deterministic check result; no unbounded history |
+| lifecycle timestamps | created/updated; no ordinary delete route |
+
+The semantic body is not mutable after authorization. Material changes create a new intent rather than rewriting the authorized object.
+
+### D.2 \`AuthorizationGrant\` — persistent entity
+
+Purpose: scoped authority to let one executor attempt one semantic operation.
+
+Fields:
+
+- UUID + tenant/org;
+- \`intentId\`;
+- exact \`executorId\`;
+- \`actionKind\`;
+- exact destination scope;
+- \`grantedByUserId\`;
+- \`scopeDigest\` over the authorized intent facts;
+- \`expiresAt\`;
+- \`revokedAt\` nullable;
+- created timestamp.
+
+Rules:
+
+- grantor must hold \`reality_layer.authorization.grant\`;
+- grantor must resolve to \`auth.User.kind = 'human'\`;
+- grantor ID must differ from the human/agent principal that originated the intent;
+- grant must match the current intent digest exactly;
+- expiry/revocation is rechecked immediately before executor start;
+- no secrets or machine credentials are stored here.
+
+### D.3 \`ExecutionRecord\` — persistent entity
+
+Purpose: one dispatch attempt. An intent may have multiple attempts only if no previous physical execution is known to have started, or after explicit compensation/retry policy in future.
+
+Fields:
+
+- UUID + tenant/org;
+- \`intentId\`, \`executorId\`;
+- monotonically allocated \`attemptNo\`;
+- unique \`dispatchKey\`;
+- status;
+- optional \`externalExecutionId\`;
+- \`startedAt\`, \`finishedAt\`;
+- \`outcomeCode\`, \`failureCode\`;
+- bounded executor metadata that is not evidence.
+
+Execution status is not evidence. A successful executor return creates a separate executor-sourced \`EvidenceEnvelope\`.
+
+### D.4 \`EvidenceEnvelope\` — persistent append-only entity
+
+Purpose: one observation/claim with provenance.
+
+Fields:
+
+- UUID + tenant/org;
+- \`intentId\`;
+- optional \`executionId\`;
+- \`sourceKind\`: \`executor|camera|vlm|barcode|tag|measurement|human|robot|other\`;
+- \`sourceId\`;
+- \`evidenceType\`: MVP includes \`task_completion_observation\` and \`object_location\`; protocol can add the task's other named types;
+- typed/bounded \`claimJson\`;
+- optional confidence in [0,1];
+- \`observedAt\`, \`recordedAt\`;
+- optional bounded artifact references (opaque Open Mercato/media IDs, never secrets/pre-signed credentials);
+- bounded provenance: model/detector version, sensor ID, adapter version;
+- stable \`externalEventId\` or derived idempotency key.
+
+The entity has **no update/delete API** in the MVP. Corrections are new evidence rows. A unique source/event key collapses duplicate delivery.
+
+### D.5 \`RealityDiff\` — persistent entity
+
+Purpose: durable proposed relationship between a business snapshot and the supported physical observation.
+
+Fields:
+
+- UUID + tenant/org;
+- \`intentId\`, \`executionId\`;
+- status;
+- bounded \`businessBeforeJson\` plus version/digest;
+- bounded \`observedJson\`;
+- bounded \`proposedChangeJson\`;
+- bounded evidence-ID list (MVP hard cap, e.g. 16);
+- \`effectAdapterKey\` (MVP \`wms_move\`);
+- \`effectCommandId\` snapshot (MVP \`wms.inventory.move\`);
+- bounded \`effectInputJson\` deterministic base input;
+- decision actor/time;
+- \`mergeResultJson\` (e.g. WMS movement ID);
+- failure code / retry metadata.
+
+There is no separate \`ReconciliationDecision\` table. Decision commands and their \`ActionLog\` entries provide durable decision history; \`RealityDiff\` stores current outcome.
+
+### D.6 Concepts deliberately not persisted as entities
+
+| Concept | Representation |
+|---|---|
+| \`PhysicalExecutor\` | DI/runtime interface + registry |
+| \`ExecutorCapability\` | immutable descriptor value object |
+| \`ExecutorCredential\` | credential-provider decision; secret material stays below boundary |
+| \`AuthorizedPhysicalIntent\` | immutable value object produced by successful gate evaluation |
+| \`GateCheck\` | bounded value objects in \`latestGateJson\`; historical decisions in ActionLog |
+| \`ReconciliationDecision\` | command input + ActionLog |
+| \`CompensationRequest\` | future PhysicalIntent kind, not MVP entity |
+
+This avoids entity explosion while preserving every durable fact required by the causal chain.
+
+### D.7 Indexes and cardinality
+
+Minimum supporting indexes:
+
+- intent: \`(tenant_id, organization_id, status, created_at)\`, \`originator_user_id\`;
+- grant: \`(tenant_id, organization_id, intent_id, expires_at)\`;
+- execution: unique \`(tenant_id, organization_id, intent_id, attempt_no)\`, unique dispatch key;
+- evidence: \`(tenant_id, organization_id, intent_id, recorded_at)\`, unique source-event idempotency key;
+- diff: \`(tenant_id, organization_id, intent_id, status, created_at)\`.
+
+All JSON fields have schema-level size/count limits. There are no count-growing embedded histories.
+
+## E. State machines
+
+### E.1 PhysicalIntent
+
+The candidate lifecycle is simplified; there is no persisted \`DRAFT\` or \`CHECKING\` state.
+
+\`\`\`text
+PENDING
+  ├─ gate fails ───────────────> BLOCKED
+  ├─ gate passes ──────────────> AUTHORIZED
+  └─ user cancels ─────────────> CANCELLED
+
+BLOCKED
+  ├─ re-evaluate + passes ─────> AUTHORIZED
+  ├─ re-evaluate + fails ──────> BLOCKED
+  └─ user cancels ─────────────> CANCELLED
+
+AUTHORIZED
+  ├─ dispatch ─────────────────> DISPATCHED
+  ├─ gate becomes invalid ─────> BLOCKED
+  └─ user cancels pre-dispatch > CANCELLED
+
+DISPATCHED
+  ├─ worker starts executor ───> EXECUTING
+  ├─ pre-start gate fails ─────> BLOCKED
+  └─ queued attempt abandoned ─> AUTHORIZED or BLOCKED after fresh gate
+
+EXECUTING
+  ├─ terminal executor result ─> EXECUTED
+  └─ failure/timeout ──────────> FAILED
+
+EXECUTED
+  └─ reconciliation terminal ──> CLOSED
+
+FAILED
+  └─ operator closes/compensates later -> CLOSED
+
+CANCELLED, CLOSED are terminal.
+\`\`\`
+
+Owner:
+- create/re-evaluate/grant/cancel/dispatch: Reality Layer commands;
+- \`DISPATCHED -> EXECUTING\`: execution worker immediately before external call;
+- execution terminal transitions: worker;
+- close: reconciliation command/policy.
+
+No \`EXECUTING -> CANCELLED\` in MVP: cancellation after physical start is not assumed safe.
+
+### E.2 ExecutionRecord
+
+\`\`\`text
+QUEUED -> STARTED -> SUCCEEDED
+   |        |-----> FAILED
+   |        |-----> TIMED_OUT
+   |-----> ABANDONED
+   |-----> FAILED (pre-start gate/credential failure)
+\`\`\`
+
+Every terminal state is terminal. A late callback after \`FAILED/TIMED_OUT/ABANDONED\` is stored as evidence with a late-event flag; it never rewrites the execution result or auto-mutates business state.
+
+### E.3 RealityDiff
+
+\`\`\`text
+PROPOSED
+  ├─ request more evidence -> NEEDS_EVIDENCE
+  ├─ reject ----------------> REJECTED
+  └─ accept ----------------> MERGING
+
+NEEDS_EVIDENCE
+  ├─ new evidence + rebuild -> PROPOSED
+  └─ reject ----------------> REJECTED
+
+MERGING
+  ├─ command succeeds ------> MERGED
+  └─ command fails ---------> MERGE_FAILED
+
+MERGE_FAILED
+  ├─ retry idempotently ----> MERGING
+  ├─ state became stale ----> NEEDS_EVIDENCE
+  └─ reject ----------------> REJECTED
+
+MERGED, REJECTED are terminal.
+\`\`\`
+
+There is no separate \`ACCEPTED\` state: acceptance atomically claims the merge attempt; the actual business command result determines \`MERGED\`.
+
+## F. Agent Orchestrator and AI Assistant integration
+
+### F.1 Question A — PhysicalIntent vs Agent Orchestrator proposal
+
+A PhysicalIntent may be the **domain object produced from** an approved AO proposal, but it is not the proposal itself. Proposals carry agent reasoning/disposition lifecycle; intents carry physical semantics and persist regardless of agent origin.
+
+### F.2 Question B — disposition/pending action/workflow reuse
+
+- AO disposition decides whether an agent proposal may reach an effector.
+- AI Assistant \`prepareMutation\` decides whether an AI mutation tool may execute.
+- workflow USER_TASK can represent human business approval.
+- none of these is a machine credential or scoped physical grant.
+
+Reuse them where their semantics match; keep \`AuthorizationGrant\` separate.
+
+### F.3 Question C — should physical execution be an effector?
+
+No. An AO effector should call \`reality_layer.intent.create\`. A queue worker later invokes the physical executor after Reality Gate authorization.
+
+### F.4 Question D — feedback to AO/workflows
+
+Reality Layer emits typed lifecycle events with intent/execution/diff IDs. Optional AO/workflow glue may subscribe or signal a waiting workflow. Reality Layer does not import AO or workflows directly.
+
+### F.5 Question E — mechanisms not to overload
+
+Do not overload:
+
+- AO confidence/disposition as physical policy;
+- \`AiPendingAction\` as executor permission;
+- workflow task status as execution status;
+- \`work_orders.Reconciliation\` as RealityDiff;
+- human feature RBAC as machine identity.
+
+### F.6 AI tool surface
+
+Safe typed tools:
+
+- \`reality_layer.create_physical_intent\` — **mutation**, therefore subject to the AI mutation approval gate;
+- \`reality_layer.get_physical_intent\` — read;
+- \`reality_layer.list_available_executors\` — read;
+- \`reality_layer.get_reality_diff\` — read;
+- \`reality_layer.request_additional_evidence\` — mutation, but does not execute/merge.
+
+Not exposed as AI tools:
+
+- grant authorization;
+- change executor credentials;
+- force gate result;
+- force dispatch;
+- accept/merge RealityDiff;
+- bypass policy.
+
+Grant and reconciliation commands independently require a human principal server-side, so accidentally granting an agent the corresponding feature is still fail-closed.
+
+## G. Authorization model
+
+Authorization is five separate checks; combining them would create privilege escalation paths.
+
+### G.1 Business actor authorization
+
+Open Mercato feature RBAC answers “may this authenticated actor request/inspect/grant/reconcile?”
+
+Proposed features:
+
+- \`reality_layer.intent.view\`
+- \`reality_layer.intent.create\`
+- \`reality_layer.authorization.grant\`
+- \`reality_layer.execution.dispatch\`
+- \`reality_layer.evidence.view\`
+- \`reality_layer.diff.view\`
+- \`reality_layer.reconciliation.decide\`
+- \`reality_layer.executor.view\`
+
+Default demo roles:
+- normal operator: view + intent.create + evidence/diff view;
+- admin/supervisor: plus authorization.grant, execution.dispatch, reconciliation.decide.
+
+### G.2 Executor capabilities
+
+Semantic claims such as \`move_object\`, \`observe\`, \`identify\`, \`inspect\`, with bounded constraints such as payload/workspace/object class. Capability evaluation is deterministic TypeScript, not an LLM decision.
+
+### G.3 Executor credentials
+
+A provider answers whether executor identity/credential/liveness is acceptable for this task. It returns a decision, never credential material. The Mock provider passes deterministically. A future edge adapter can consult \`edge\`; secrets never enter \`PhysicalIntent\`, queue payloads, logs or evidence.
+
+### G.4 Physical policy
+
+Policy can require a grant for a workspace/risk class, independent verification, or optional safety clearance. MVP policy contains one deterministic restriction so the demo intentionally reaches \`BLOCKED\`.
+
+### G.5 Reconciliation authorization
+
+Accepting physical evidence into ERP truth is a separate privilege. For MVP the decision actor must be a human principal and have \`reality_layer.reconciliation.decide\`. The downstream effect adapter also rechecks the feature(s) required by the target command, e.g. WMS inventory adjustment/move permission.
+
+### G.6 No-self-authorization invariant
+
+Server-side grant command:
+
+1. resolves authenticated user;
+2. requires \`User.kind === 'human'\`;
+3. requires grant feature;
+4. compares grantor with the trusted originator principal recorded at intent creation;
+5. rejects equality;
+6. computes the grant scope digest from server-loaded intent data;
+7. ignores any client-supplied “already authorized” flag.
+
+For AI Assistant origins where the human is operating an agent without a provisioned agent principal, provenance must retain the AI agent/conversation identity separately from the human user. The grantor can be the human; the AI identity cannot become the grantor.
+
+## H. Executor contract
+
+The public business contract contains no ROS, pose, joints, maps or transport details.
+
+\`\`\`ts
+export type CapabilityDescriptor = Readonly<{
+  kind: 'move_object' | 'observe' | 'identify' | 'inspect' | string
+  constraints?: Readonly<Record<string, string | number | boolean>>
+}>
+
+export type ExecutorDescriptor = Readonly<{
+  executorId: string
+  executorKind: 'mock' | 'a1xy' | 'lerobot' | 'bridge' | string
+  label: string
+  capabilities: readonly CapabilityDescriptor[]
+}>
+
+export type AuthorizedPhysicalTask = Readonly<{
+  intentId: string
+  executionId: string
+  kind: 'move_object'
+  subject: Readonly<{ kind: string; id: string }>
+  source: Readonly<{ kind: string; id: string }> | null
+  destination: Readonly<{ kind: string; id: string }>
+  context: Readonly<{ kind: string; id: string }> | null
+  parameters: Readonly<Record<string, unknown>>
+  authorization: Readonly<{
+    grantIds: readonly string[]
+    evaluatedAt: string
+    validUntil: string | null
+  }>
+}>
+
+export type CapabilityResult =
+  | Readonly<{ ok: true }>
+  | Readonly<{ ok: false; code: string; messageKey: string }>
+
+export type ExecutionResult = Readonly<{
+  outcome: 'success' | 'failure' | 'unexpected_result'
+  externalExecutionId?: string
+  failureCode?: string
+  evidence: readonly EvidenceInput[]
+}>
+
+export interface PhysicalExecutor {
+  descriptor(): ExecutorDescriptor
+  canHandle(task: AuthorizedPhysicalTask): Promise<CapabilityResult>
+  execute(
+    task: AuthorizedPhysicalTask,
+    ctx: Readonly<{ idempotencyKey: string; signal: AbortSignal }>,
+  ): Promise<ExecutionResult>
+}
+\`\`\`
+
+A credential provider is intentionally separate:
+
+\`\`\`ts
+export interface ExecutorCredentialProvider {
+  evaluate(input: {
+    executorId: string
+    intentId: string
+    actionKind: string
+    now: Date
+  }): Promise<{ ok: true; validUntil: Date | null } | { ok: false; code: string }>
+}
+\`\`\`
+
+The task contains authorization facts, not credentials/tokens.
+
+### H.1 MockExecutor
+
+The normative test backend supports:
+
+- \`SUCCESS\`: emits executor completion evidence claiming requested destination;
+- \`FAILURE\`: returns a failure and optional observations, no success shortcut;
+- \`UNEXPECTED_RESULT\`: execution ends but evidence claims an alternative location such as STAGING-AREA.
+
+The mock outcome is execution-adapter/test configuration, **not part of the semantic PhysicalIntent**. Development UI may pass a bounded mock scenario only when the selected executor is \`mock\`; production configuration rejects it.
+
+### H.2 A1XY / LeRobot adapters
+
+Adapters translate \`AuthorizedPhysicalTask\` to their robotics application/bridge. Internally they may invoke perception, grasp planning, MoveIt/ROS 2/vendor SDK/control and verification. None of those details leak into the Reality Layer interface.
+
+The same executor identifier may denote a robot application or cell rather than a single arm. That is intentional.
+
 ## Human review gate
 
-Implementation must not begin until this specification has been expanded through the full repository findings, data/state/API/security/test plan and reviewed by a human. Any implementation commit before that review is out of scope for this branch.
+Implementation must not begin until this specification has been expanded through sections I–T, run through the adversarial review below, and reviewed by a human. Any implementation commit before that review is out of scope for this branch.
