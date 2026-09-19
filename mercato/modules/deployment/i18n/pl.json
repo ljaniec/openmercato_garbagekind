@@ -1,0 +1,14 @@
+{
+  "deployment.nav.group": "Physical AI",
+  "deployment.assignments.title": "Wdrożenia",
+  "deployment.assignments.subtitle": "Stan pożądany floty i dzierżawy zależne od klasy ryzyka celi",
+  "deployment.assignments.empty": "Żaden robot nie ma przypisanej polityki.",
+  "deployment.state.running": "Pracuje",
+  "deployment.state.stopped": "Zatrzymany",
+  "deployment.reconciliation.converged": "Zgodny",
+  "deployment.reconciliation.drift": "Rozjazd",
+  "deployment.reconciliation.unknown": "Nie wiadomo",
+  "deployment.risk.fenced": "Cela ogrodzona",
+  "deployment.risk.shared": "Przestrzeń dzielona",
+  "deployment.risk.public": "Przestrzeń publiczna"
+}

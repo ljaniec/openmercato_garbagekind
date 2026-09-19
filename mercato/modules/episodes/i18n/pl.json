@@ -1,0 +1,15 @@
+{
+  "episodes.nav.group": "Physical AI",
+  "episodes.cadence.title": "Epizody",
+  "episodes.cadence.subtitle": "Kadencja autonomii: ile epizodów mija między interwencjami",
+  "episodes.cadence.empty": "Księga epizodów jest pusta.",
+  "episodes.outcome.success": "Udany",
+  "episodes.outcome.failure": "Nieudany",
+  "episodes.outcome.aborted": "Przerwany",
+  "episodes.outcome.timeout": "Przekroczony czas",
+  "episodes.kind.adjust": "Poprawka otoczenia",
+  "episodes.kind.manual_reset": "Odblokowanie ręczne",
+  "episodes.kind.teleop_takeover": "Przejęcie sterowania",
+  "episodes.kind.abort": "Przerwanie zadania",
+  "episodes.kind.estop": "Zatrzymanie awaryjne"
+}

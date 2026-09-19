@@ -1,0 +1,14 @@
+{
+  "deployment.nav.group": "Physical AI",
+  "deployment.assignments.title": "Deployments",
+  "deployment.assignments.subtitle": "Fleet desired state and leases scaled to cell risk class",
+  "deployment.assignments.empty": "No robot has a policy assigned.",
+  "deployment.state.running": "Running",
+  "deployment.state.stopped": "Stopped",
+  "deployment.reconciliation.converged": "Converged",
+  "deployment.reconciliation.drift": "Drift",
+  "deployment.reconciliation.unknown": "Unknown",
+  "deployment.risk.fenced": "Fenced cell",
+  "deployment.risk.shared": "Shared space",
+  "deployment.risk.public": "Public space"
+}

@@ -241,3 +241,109 @@ pick-bin-ur10e ur10e-pick   [(2, '137069a4929b', 'ur10e-pick@r1', 'registered', 
 `released: 0` po zasiewie jest zamierzone. Zasiew wgrywa wagi; wypuszczenie
 ich na flotę jest osobną decyzją pod osobnym uprawnieniem i nie dzieje się
 przy imporcie.
+
+---
+
+**Faza 2 — moduł `deployment`** (w `mercato/modules/deployment`): kanał stanu
+pożądanego. Trzy tabele, cztery komendy, endpoint panelu, dwa endpointy agenta,
+strona backendu, trzy komendy CLI, 37 testów jednostkowych.
+
+Teza modułu mieści się w jednym zdaniu: **dzierżawa jest odwrotnością
+heartbeatu**. Heartbeat mówi centrali, że robot żyje; dzierżawa mówi robotowi,
+jak długo wolno mu pracować bez potwierdzenia z centrali. Konsekwencja jest
+twarda: decyzja o zatrzymaniu zapada lokalnie, z zegara i z jednej liczby —
+nie wymaga połączenia, zapisu w bazie ani niczyjej zgody.
+
+| Decyzja | Odrzucona alternatywa | Dlaczego |
+| --- | --- | --- |
+| Osobny endpoint dzierżawy | stan pożądany doklejony do odpowiedzi heartbeatu | agent, który przestałby bić serce, traciłby mandat natychmiast niezależnie od klasy celi — czyli dokładnie to, czemu dzierżawa w celi ogrodzonej ma zapobiegać |
+| `fenced` 7 dni, `shared` 8 h, `public` 120 s | jedna długość konfigurowalna globalnie | każda pojedyncza wartość jest albo za krótka dla celi ogrodzonej, albo za długa dla publicznej; administrator ustawia ją pod ten przypadek, który akurat boli |
+| Nieznana klasa ryzyka → **najkrótsza** dzierżawa | najdłuższa albo błąd | literówka w konfiguracji celi ma powodować nadmiarowe zatrzymania, a nie ciche przedłużenie pracy w przestrzeni, o której nic nie wiemy |
+| Przypisanie i dzierżawa jako dwie tabele | jedno `expires_at` na przypisaniu | zlanie robi z każdej zmiany stanu pożądanego zdarzenie o długości zależnej od jakości łącza |
+| Klasa ryzyka kopiowana do przypisania | odczyt z celi przy każdej dzierżawie | przestawienie celi z `public` na `fenced` przedłużyłoby z mocą wsteczną mandat, który już działa w hali |
+| Odnowienie po 1/3 okresu | po połowie albo tuż przed | agent musi zdążyć ponowić dwa razy; przy 120 s daje to pierwszą próbę po 40 s i dwie szanse zapasowe |
+| Odwołanie dzierżawy jako uzupełnienie | odwołanie jako mechanizm zatrzymania | robot bez łącza i tak się nie dowie; natychmiastowe zatrzymanie należy do deterministycznej warstwy bezpieczeństwa, która nie przechodzi przez tę platformę |
+| Brak przypisania → 200 i „stój" | 404 | robot bez przypisania to normalny stan świeżo uruchomionej maszyny; 404 wepchnąłby agenta w pętlę ponawiania jak przy awarii |
+| Własny przedrostek podpisu `deployment.lease:` | ten sam podpis, co przy heartbeacie | bez wiązania kontekstu przechwycony heartbeat daje przedłużenie mandatu do pracy |
+| `unknown` jako trzeci stan uzgodnienia | milczący robot liczony jako zgodny | to ten sam błąd, co kolumna `online` gaszona zadaniem cyklicznym — pulpit kłamie najgłośniej wtedy, kiedy najbardziej trzeba mu wierzyć |
+| Ponowna kontrola rewizji embodimentu przy przypisaniu | zaufanie kontroli z fazy 1 | tam pytaniem było „czy te wagi pasują do tej rewizji", tu „czy ten robot jest tej rewizji" — wymiana chwytaka podnosi rewizję i wczorajsza zgodność dziś nie obowiązuje |
+| `employee`: podgląd + odwołanie, bez przypisania | jedno uprawnienie na moduł | ta sama asymetria, co w cyklu życia robota: zatrzymać wolno szeroko, dopuścić — wąsko |
+
+Uruchomienie:
+
+```bash
+./mercato/install.sh deployment
+cd /sciezka/do/open-mercato/apps/mercato
+yarn generate && yarn mercato db migrate
+yarn mercato auth sync-role-acls
+yarn mercato deployment leases            # ściąga: klasa ryzyka → długość dzierżawy
+yarn mercato deployment prove --wait 125  # dowód fazy (trwa ponad dwie minuty)
+yarn mercato deployment status
+```
+
+Ekran: `/backend/deployment`, uprawnienie `deployment.view`.
+
+### Dowód fazy 2
+
+Warunek zaliczenia brzmiał: *po wygaśnięciu dzierżawy robot w celi `public`
+przechodzi do stanu niepracującego bez udziału centrali; ten sam robot w celi
+`fenced` pracuje dalej.* „Ten sam robot" wzięte dosłownie — jedna maszyna
+dostaje dwie dzierżawy w odstępie sekundy, więc po tej samej ciszy porównujemy
+wyłącznie klasę ryzyka:
+
+```
+DOWÓD FAZY 2 — dzierżawa jako odwrotność heartbeatu
+
+Długość dzierżawy per klasa ryzyka (z lib/lease.ts):
+  fenced    604800 s
+  shared     28800 s
+  public       120 s
+
+1) UR10E-0001 stoi w celi ogrodzonej
+   klasa ryzyka fenced, dzierżawa 604800 s
+   mandat do 2026-09-26T05:31:07.070Z (odnowienie po 201600 s)
+
+2) ten sam robot przestawiony do celi publicznej (Cela P)
+   klasa ryzyka public, dzierżawa 120 s
+   mandat do 2026-09-19T05:33:07.124Z
+
+3) cisza przez 125 s — centrala nie zapisuje niczego
+   wierszy przed ciszą 5, po ciszy 5
+
+4) ten sam robot, ta sama cisza, dwie klasy celi:
+   cela fenced  (dzierżawa 604800 s): PRACUJE — dzierżawa ważna jeszcze 604674 s
+   cela public  (dzierżawa    120 s): NIE PRACUJE — dzierżawa wygasła 6 s temu
+                                       — robot zatrzymuje się sam, bez udziału centrali
+```
+
+Punkt trzeci jest tym, który cokolwiek dowodzi: liczba wierszy przed ciszą
+i po niej jest ta sama. Nic nie zostało zapisane, nikt nie wysłał polecenia
+zatrzymania — upłynął czas. Agent w dowodzie nie jest atrapą: generuje
+prawdziwą parę Ed25519 i podpisuje prawdziwe żądanie dzierżawy własnym
+przedrostkiem, a podpis zebrany w kontekście uderzenia serca jest odrzucany
+(test `odrzuca podpis zebrany w kontekście uderzenia serca`).
+
+Ścieżka sieciowa, konto `employee` (`deployment.view`, bez `deployment.assign`):
+
+```
+GET /api/deployment/assignments  →  200
+totals: {"assignments": 1, "working": 0, "haltedByLease": 1, "drift": 0, "unknown": 1}
+byRiskClass: {"public": 1}
+UR10E-0001 pick-bin-ur10e v1 public leaseSeconds=120 working=False
+  | dzierżawa wygasła 75 s temu — robot zatrzymuje się sam, bez udziału centrali | unknown
+```
+
+`unknown` w kolumnie uzgodnienia jest poprawną odpowiedzią, a nie brakiem
+danych do ukrycia: agent w dowodzie nigdy nie zgłosił stanu faktycznego,
+więc platforma nie twierdzi, że go zna.
+
+#### Błąd znaleziony przy odtwarzaniu dowodu
+
+Pierwsze przejście wywróciło się na `deployment_assignments_active_unique`.
+Nadpisanie poprzedniego przypisania i wstawienie nowego szły jednym zrzutem,
+a MikroORM wykonał INSERT przed UPDATE-em — przez moment istniały dwa czynne
+przypisania tego samego ramienia i baza słusznie odmówiła. Naprawione osobnym
+zrzutem przed wstawieniem. To ta sama klasa pułapki, co czytanie `id` przed
+`flush()`: kod wygląda poprawnie i wywala się dopiero na bazie. Testy
+jednostkowe tego nie złapały i złapać nie mogły — atrapa `EntityManager`
+nie ma indeksów.

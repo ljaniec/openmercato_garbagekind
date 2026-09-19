@@ -1,0 +1,15 @@
+{
+  "episodes.nav.group": "Physical AI",
+  "episodes.cadence.title": "Episodes",
+  "episodes.cadence.subtitle": "Autonomy cadence: episodes between human interventions",
+  "episodes.cadence.empty": "The episode ledger is empty.",
+  "episodes.outcome.success": "Success",
+  "episodes.outcome.failure": "Failure",
+  "episodes.outcome.aborted": "Aborted",
+  "episodes.outcome.timeout": "Timeout",
+  "episodes.kind.adjust": "Environment adjustment",
+  "episodes.kind.manual_reset": "Manual reset",
+  "episodes.kind.teleop_takeover": "Teleop takeover",
+  "episodes.kind.abort": "Task abort",
+  "episodes.kind.estop": "Emergency stop"
+}
