@@ -2,7 +2,14 @@ import type { ModuleCli } from '@open-mercato/shared/modules/registry'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { CommandBus, CommandRuntimeContext } from '@open-mercato/shared/lib/commands'
+import { readFileSync } from 'node:fs'
+import { resolve as resolvePath } from 'node:path'
 import { Cell, EmbodimentRevision, Robot, Site, type RobotState } from './data/entities'
+import {
+  computeSpecDigest,
+  validateEmbodimentSpec,
+  type EmbodimentSpec,
+} from './lib/embodimentSpec'
 import { evaluateRobotCalibration } from './commands/robots'
 import { isActive } from './lib/lifecycle'
 
@@ -335,4 +342,99 @@ const statusCommand: ModuleCli = {
   },
 }
 
-export default [seedCommand, statusCommand] satisfies ModuleCli[]
+
+/**
+ * Wczytanie opisu embodimentu z pliku.
+ *
+ * To jest wejście dla prawdziwego sprzętu i zastępuje zastępczy odcisk
+ * z `seed`. Trzy rzeczy dzieją się tu inaczej niż dotąd:
+ *
+ * 1. Odcisk kontraktu jest **liczony** z kanonicznej postaci opisu, a nie
+ *    przyjmowany od wgrywającego. Deklarowany odcisk porównywał deklarację
+ *    sam ze sobą i nie stwierdzał niczego.
+ * 2. Opis z jawnymi lukami (`unknown`) wolno zaewidencjonować, ale komenda
+ *    mówi wprost, że na jego podstawie nie da się dopuścić polityki.
+ * 3. Powtórne wczytanie tego samego pliku nie tworzy drugiej rewizji —
+ *    porównanie idzie po odcisku, nie po nazwie.
+ */
+const embodimentCommand: ModuleCli = {
+  command: 'embodiment',
+  async run(rest) {
+    const args = parseArgs(rest)
+    const file = typeof args.file === 'string' ? args.file : ''
+    if (!file) throw new Error('Podaj opis: --file <ścieżka do JSON>')
+
+    const spec = JSON.parse(readFileSync(resolvePath(file), 'utf8')) as EmbodimentSpec
+    const verdict = validateEmbodimentSpec(spec)
+
+    console.log(`Opis   : ${spec.name} (${spec.embodimentKey} r${spec.revision})`)
+
+    if (!verdict.valid) {
+      console.log('\nOpis odrzucony:')
+      for (const problem of verdict.problems.filter((p) => p.severity === 'error')) {
+        console.log(`  ${problem.path}: ${problem.reason}`)
+      }
+      throw new Error('Opis embodimentu nie przeszedł walidacji.')
+    }
+
+    const digest = computeSpecDigest(spec)
+    const container = await createRequestContainer()
+    const em = container.resolve('em') as EntityManager
+    const scope = await resolveScope(em, args)
+
+    const istnieje = await em.findOne(EmbodimentRevision, {
+      tenantId: scope.tenantId,
+      embodimentKey: spec.embodimentKey,
+      revision: spec.revision,
+    } as never)
+
+    if (istnieje) {
+      const poprzedni = (istnieje as unknown as { specDigest: string }).specDigest
+      if (poprzedni === digest) {
+        console.log(`Odcisk : ${digest}`)
+        console.log('Stan   : bez zmian — ta rewizja już istnieje z tym samym kontraktem.')
+      } else {
+        /*
+         * Świadoma odmowa. Rewizja jest niezmienna: polityki dopuszczone dla
+         * poprzedniego kontraktu wiążą się z tym numerem rewizji. Podmiana
+         * kontraktu pod istniejącym numerem cicho unieważniłaby każdą z nich.
+         */
+        console.log(`Odcisk w bazie : ${poprzedni}`)
+        console.log(`Odcisk w pliku : ${digest}`)
+        throw new Error(
+          `Rewizja ${spec.embodimentKey} r${spec.revision} istnieje z innym kontraktem. ` +
+            'Rewizja jest niezmienna — podnieś numer rewizji zamiast podmieniać kontrakt.',
+        )
+      }
+    } else {
+      const utworzona = em.create(EmbodimentRevision, {
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        embodimentKey: spec.embodimentKey,
+        revision: spec.revision,
+        name: spec.name,
+        specDigest: digest,
+        dofCount: spec.kinematics?.dofCount ?? null,
+        spec: spec as unknown as Record<string, unknown>,
+        requiredCalibrations: spec.requiredCalibrations,
+      } as never)
+      em.persist(utworzona)
+      await em.flush()
+      console.log(`Odcisk : ${digest}`)
+      console.log('Stan   : zapisana.')
+    }
+
+    console.log(`Stawy  : ${spec.actuators.joints.map((j) => j.name).join(', ')}`)
+    console.log(`Kalibr.: ${spec.requiredCalibrations.join(', ')}`)
+
+    if (!verdict.complete) {
+      console.log(`\nOpis NIEKOMPLETNY — ${verdict.unknownFields.length} wartości do zmierzenia:`)
+      for (const path of verdict.unknownFields) console.log(`  ${path}`)
+      // Rozróżnienie jest tu sednem: ewidencja tak, dopuszczenie nie.
+      console.log('\nRamię wolno zaewidencjonować. Dopuszczenie polityki do ruchu')
+      console.log('wymaga uzupełnienia powyższych pomiarem — nie zgadywaniem.')
+    }
+  },
+}
+
+export default [seedCommand, statusCommand, embodimentCommand] satisfies ModuleCli[]
