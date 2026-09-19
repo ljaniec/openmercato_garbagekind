@@ -110,20 +110,12 @@ przejście stanu. Nie uruchamia sprzętu — dispatch pozostaje zadaniem M3.
 
 ## Następny krok — M3
 
-Reality Gate ma połączyć pięć niezależnych werdyktów:
-
-```text
-business precondition
-AND executor capability
-AND executor credential/liveness
-AND matching non-expired AuthorizationGrant
-AND deterministic physical policy
-```
-
-Nieznany lub niedostępny warunek daje `BLOCKED`, nigdy „spróbujmy i zobaczymy”.
-
-Pierwszym backendem pozostaje `MockExecutor`. Dzięki temu cały trust boundary
-da się przetestować zanim A1XY lub LeRobot wykona choć jeden ruch.
+M3 powinno dodać asynchroniczny dispatch przez kolejkę Open Mercato,
+`ExecutionRecord`, normatywny `MockExecutor` i kontrakt wykonawcy dla
+późniejszych adapterów A1XY/LeRobot. Worker przed rozpoczęciem fizycznego
+ruchu musi ponownie sprawdzić, że intent nadal jest `AUTHORIZED` i że zapisany
+gate dotyczy tego samego executora; M3 nie może samodzielnie tworzyć grantu ani
+uzgadniać skutku z ERP.
 
 ## Lokalna weryfikacja po instalacji
 
@@ -136,5 +128,4 @@ yarn mercato auth sync-role-acls
 yarn test --testPathPatterns "modules/reality_layer"
 ```
 
-Po M2 dojdzie test end-to-end: intent zablokowany → grant człowieka → gate
-`AUTHORIZED`. Dopiero M3 doda faktyczne asynchroniczne wykonanie przez kolejkę.
+Po M2 test ścieżki referencyjnej powinien kończyć się na `AUTHORIZED` bez uruchamiania sprzętu. M3 rozszerzy tę samą ścieżkę o kolejkę i `ExecutionRecord`.
