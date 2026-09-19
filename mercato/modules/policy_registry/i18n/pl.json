@@ -1,0 +1,14 @@
+{
+  "policy_registry.nav.group": "Physical AI",
+  "policy_registry.policies.title": "Polityki",
+  "policy_registry.policies.subtitle": "Wersjonowany rejestr wyuczonych sterowników i ich artefaktów",
+  "policy_registry.policies.empty": "Rejestr polityk jest pusty. Uruchom mercato policy_registry seed.",
+  "policy_registry.status.registered": "Zarejestrowana",
+  "policy_registry.status.released": "Wypuszczona",
+  "policy_registry.status.deprecated": "Wycofana",
+  "policy_registry.method.rl": "RL",
+  "policy_registry.method.il": "Uczenie z demonstracji",
+  "policy_registry.method.offline_rl": "Offline RL",
+  "policy_registry.method.vla": "Model VLA",
+  "policy_registry.method.classical": "Klasyczna"
+}

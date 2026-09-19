@@ -1,0 +1,14 @@
+{
+  "policy_registry.nav.group": "Physical AI",
+  "policy_registry.policies.title": "Policies",
+  "policy_registry.policies.subtitle": "Versioned registry of learned controllers and their artifacts",
+  "policy_registry.policies.empty": "The policy registry is empty. Run mercato policy_registry seed.",
+  "policy_registry.status.registered": "Registered",
+  "policy_registry.status.released": "Released",
+  "policy_registry.status.deprecated": "Deprecated",
+  "policy_registry.method.rl": "RL",
+  "policy_registry.method.il": "Imitation learning",
+  "policy_registry.method.offline_rl": "Offline RL",
+  "policy_registry.method.vla": "VLA model",
+  "policy_registry.method.classical": "Classical"
+}

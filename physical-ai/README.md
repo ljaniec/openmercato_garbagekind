@@ -159,3 +159,85 @@ i nie ma się jak zalogować, więc uwierzytelnia się podpisem kluczem, któreg
 centrala nie posiada. Odpowiedź heartbeatu niesie stan łączności i następny
 termin — i nic poza tym; stan pożądany oprogramowania jest osobnym kanałem
 i sklejenie go tutaj zrobiłoby z żywotności warunek wdrożenia.
+
+---
+
+**Faza 1 — moduł `policy_registry`** (w `mercato/modules/policy_registry`):
+wersjonowany rejestr wyuczonych sterowników. Cztery tabele, trzy komendy,
+endpoint panelu, strona backendu, trzy komendy CLI, 41 testów jednostkowych.
+
+Moduł odpowiada na dwa pytania i żadne inne: **co to za polityka** i **na czym
+wolno ją uruchomić**. Nie ma tu wdrożenia, stanu pożądanego ani wyników
+ewaluacji. Gdyby pojawiło się tu pole `robot_id`, modelowanie poszłoby złą
+drogą — polityka wiąże się z kontraktem sprzętu, nie z egzemplarzem.
+
+| Decyzja | Odrzucona alternatywa | Dlaczego |
+| --- | --- | --- |
+| Tożsamością wersji jest skrót kompletu artefaktów | numer nadawany przy każdym wgraniu | dwa wgrania tych samych wag to jedna polityka; dwa rekordy unieważniają każdą statystykę liczoną per wersja, a na tych statystykach stoi brama fazy 4 |
+| Powtórka zwraca istniejącą wersję z flagą `deduplicated` | rzucenie wyjątku | wyjątek zmusiłby każdy potok CI do odróżniania „wgrałem to już" od awarii i skończyłby się połknięciem obu |
+| `uri` i rozmiar **nie** wchodzą do skrótu treści | skrót po adresie w magazynie | migracja magazynu obiektów rozmnożyłaby całą historię wersji bez zmiany jednego bitu wag |
+| Unikat `(tenant, policy, content_digest)` w bazie | deduplikacja wyłącznie w kodzie komendy | dwa równoległe potoki CI wgrałyby ten sam model dwa razy i nikt by tego nie zauważył |
+| Odcisk kontraktu **deklarowany** przez wgrywającego | odczytany z rejestru floty przy rejestracji | odczytana wartość porównywałaby się sama ze sobą i kontrola zawsze by przechodziła; rozjazd wychodzi tylko wtedy, gdy obie strony mówią niezależnie |
+| Kopia `spec_digest` zapisana przy wersji | wyłącznie klucz obcy do rewizji | „teoretycznie niezmienna rewizja" to za mało dla zapisu, który ma odpowiedzieć regulatorowi po trzech latach |
+| Odczyt rewizji surowym SQL-em | import klasy encji z modułu `fleet` | jedna klasa zarejestrowana pod dwiema ścieżkami to gwarantowane „Metadata for entity X not found" |
+| `policy_registry.release` osobno od `manage` | jedno uprawnienie na moduł | wgranie wag jest czynnością techniczną, wypuszczenie ich na flotę — decyzją o dopuszczeniu maszyny do ruchu |
+| Brak pola „zatwierdzona" na wersji | globalna flaga dopuszczenia | dopuszczenie jest funkcją pary (wersja, klasa celi) i mieszka w `safety`; flaga globalna każe pisać uzasadnienie dla każdej celi z osobna |
+| W tabeli adres i skrót artefaktu | bajty wag w kolumnie | warunek trzeci raportu: żaden artefakt binarny nie przechodzi przez MikroORM ani przez szynę komend |
+
+Uruchomienie:
+
+```bash
+./mercato/install.sh policy_registry
+cd /sciezka/do/open-mercato/apps/mercato
+yarn generate && yarn mercato db migrate
+yarn mercato auth sync-role-acls
+yarn mercato fleet seed                     # rewizje embodimentu muszą istnieć wcześniej
+yarn mercato policy_registry seed
+yarn mercato policy_registry status
+yarn mercato policy_registry prove          # dowód fazy
+```
+
+Ekran: `/backend/policies`, uprawnienie `policy_registry.view`.
+
+### Dowód fazy 1
+
+Warunek zaliczenia brzmiał: *próba zarejestrowania wersji dla embodimentu
+o innym `spec_digest` odbija się z nazwanym powodem; powtórne wgranie tych
+samych wag nie tworzy drugiej wersji.* Przebieg na żywej instancji:
+
+```
+DOWÓD FAZY 1 — rejestr polityk
+
+1) ta sama rewizja, ale polityka uczona pod innym odciskiem kontraktu
+   odbite: Nie można zarejestrować wersji [spec_digest_mismatch]: odcisk kontraktu
+   embodimentu nie zgadza się: rewizja ur10e-pick@r1 ma demo:ur10e-pick:r1,
+   a polityka była uczona pod demo:ur10e-pick:r999-inny-kontrakt.
+
+2) rewizja z innej rodziny sprzętu
+   odbite: Nie można zarejestrować wersji [embodiment_key_mismatch]: polityka jest
+   dla rodziny ur10e-pick, a wskazana rewizja należy do fr3-assembly.
+
+3) powtórne wgranie tych samych wag pod właściwą rewizję
+   zwrócono v1 deduplicated=true; wersji przed 2, po 2
+```
+
+Komunikat odmowy niesie **obie** wartości odcisku, nie tylko kod błędu — bez
+tego operator nie wie, którą stronę poprawić. Trzeci punkt jest ważniejszy, niż
+wygląda: licznik wersji nie drgnął, mimo że komenda wykonała się normalnie
+i zwróciła identyfikator. To jest różnica między rejestrem a katalogiem plików.
+
+Druga połowa dowodu to ścieżka sieciowa — konto `employee` ma `policy_registry.view`
+i `policy_registry.manage`, ale nie `release`:
+
+```
+GET /api/policy_registry/policies  →  200
+totals: {"policies": 2, "versions": 3, "released": 0, "deprecated": 0,
+         "embodimentDrift": 0, "orphanedEmbodiment": 0}
+insert-peg-fr3 fr3-assembly [(1, '50da1b1fe566', 'fr3-assembly@r1', 'registered', ['config','weights'])]
+pick-bin-ur10e ur10e-pick   [(2, '137069a4929b', 'ur10e-pick@r1', 'registered', ['config','weights']),
+                             (1, '3ebdc0069497', 'ur10e-pick@r1', 'registered', ['config','weights'])]
+```
+
+`released: 0` po zasiewie jest zamierzone. Zasiew wgrywa wagi; wypuszczenie
+ich na flotę jest osobną decyzją pod osobnym uprawnieniem i nie dzieje się
+przy imporcie.
