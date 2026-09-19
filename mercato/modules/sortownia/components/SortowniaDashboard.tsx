@@ -67,6 +67,7 @@ type DashboardData = {
   sales?: SalesSummary
   traceability?: Traceability
   ewidencja?: Ewidencja
+  rezerwacje?: { count: number; reservedKg: number }
 }
 
 type Ewidencja = {
@@ -189,6 +190,7 @@ export default function SortowniaDashboard() {
   const sales = data?.sales
   const trace = data?.traceability
   const ewidencja = data?.ewidencja
+  const rezerwacje = data?.rezerwacje
   const bins = (data?.locations ?? []).filter((row) => row.capacityKg !== null)
   // Zapełnienie widać na liście lokalizacji, więc wykres pokazuje co innego:
   // ile każdej frakcji przeszło przez zakład w ostatnim miesiącu.
@@ -221,7 +223,13 @@ export default function SortowniaDashboard() {
           value={totals ? toMg(totals.binsKg) : null}
           suffix=" Mg"
           loading={loading}
-          footer={<span className="text-xs text-muted-foreground">Gotowe do wydania odbiorcom</span>}
+          footer={
+            <span className="text-xs text-muted-foreground">
+              {rezerwacje && rezerwacje.count > 0
+                ? `w tym ${formatMg(rezerwacje.reservedKg)} zarezerwowane (${rezerwacje.count} zamówień)`
+                : 'Gotowe do wydania odbiorcom'}
+            </span>
+          }
         />
         <KpiCard
           title="Wysortowane (30 dni)"

@@ -30,6 +30,15 @@ export type TransferCardContext = {
   commandContext: CommandRuntimeContext
   scope: TenantScope
   orders: SalesOrderIndex
+  /**
+   * Numery wydań, które faktycznie zaszły.
+   *
+   * Karta przekazania dokumentuje przekazanie, które się odbyło. Wystawienie
+   * jej dla zamówienia z odbiorem za tydzień byłoby poświadczeniem zdarzenia,
+   * do którego jeszcze nie doszło — i w ewidencji odpadów jest to poważny błąd,
+   * a nie drobna niedokładność.
+   */
+  fulfilled: Set<number>
   /** `debtorno` → numer rejestrowy BDO odbiorcy. */
   bdoByDebtor: Map<string, string>
   /** Kod odpadu → kod procesu odzysku (R1, R3, R4, R5). */
@@ -54,6 +63,9 @@ export async function loadCardNumbers(em: EntityManager, scope: TenantScope): Pr
     organizationId: scope.organizationId,
     tenantId: scope.tenantId,
     shipmentNumber: { $like: 'KPO/%' },
+    // Karta wycofana nie blokuje wystawienia nowej: jeżeli wydanie dojdzie
+    // do skutku później, ewidencja ma je objąć.
+    deletedAt: null,
   } as never)
   return new Set(
     (rows as Array<{ shipmentNumber?: string | null }>)
@@ -95,6 +107,7 @@ export async function applyTransferCards(
   const outcomes: TransferCardOutcome[] = []
 
   for (const row of rows) {
+    if (!ctx.fulfilled.has(row.orderno)) continue
     const cardNumber = cardNumberFor(row.orderno)
     if (existing.has(cardNumber)) {
       outcomes.push({ orderno: row.orderno, action: 'skip' })

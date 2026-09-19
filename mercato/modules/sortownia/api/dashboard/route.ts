@@ -401,6 +401,22 @@ export async function GET(req: Request): Promise<Response> {
     [scope.organizationId, scope.tenantId],
   )
 
+  // Rezerwacje: ile masy jest obiecane odbiorcom i nie wolno jej sprzedać
+  // drugi raz. Stary system znał tylko jedną liczbę — ile leży.
+  const [reservations] = await em.getConnection().execute<Array<{
+    total: string
+    masa: string
+  }>>(
+    `select count(*) as total,
+            coalesce(sum(r.quantity), 0) as masa
+       from wms_inventory_reservations r
+      where r.organization_id = ?
+        and r.tenant_id = ?
+        and r.status = 'active'
+        and r.source_type = 'order'`,
+    [scope.organizationId, scope.tenantId],
+  )
+
   const yardKg = locationRows
     .filter((row) => row.type === 'staging')
     .reduce((sum, row) => sum + (row.quantityKg ?? 0), 0)
@@ -429,6 +445,10 @@ export async function GET(req: Request): Promise<Response> {
         issuedKg: Number.parseFloat(row.issued),
       })),
       movements: movementRows,
+      rezerwacje: {
+        count: Number.parseInt(reservations?.total ?? '0', 10),
+        reservedKg: Number.parseFloat(reservations?.masa ?? '0'),
+      },
       ewidencja: {
         cards: Number.parseInt(cards?.total ?? '0', 10),
         massKg: Number.parseFloat(cards?.masa ?? '0'),

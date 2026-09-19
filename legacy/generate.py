@@ -236,6 +236,28 @@ def attach_sales_orders(moves, start_no: int):
 VAT = 1.23
 
 
+def make_open_orders(rng: random.Random, now: dt.datetime, start_no: int, count: int):
+    """Zamowienia przyjete, ale jeszcze niezrealizowane.
+
+    Kazda sortownia ma takie w kazdej chwili: odbiorca zamowil frakcje, termin
+    odbioru jeszcze nie nadszedl, towar ma lezec i czekac. Bez nich rezerwacje
+    magazynowe nie mialyby czego pilnowac, a magazynier obiecywalby ten sam
+    boks dwom odbiorcom.
+    """
+    orders = []
+    no = start_no
+    for _ in range(count):
+        stockid = rng.choice(list(FRACTION_BUYER))
+        debtorno = FRACTION_BUYER[stockid]
+        orddate = (now - dt.timedelta(days=rng.randint(1, 6))).date().isoformat()
+        deliverydate = (now + dt.timedelta(days=rng.randint(2, 14))).date().isoformat()
+        qty = round(rng.uniform(1500, 9000), 2)
+        orders.append((no, debtorno, orddate, deliverydate, stockid, qty,
+                       round(COST[stockid] * 1.35, 4)))
+        no += 1
+    return orders
+
+
 def make_payments(orders, rng: random.Random, now: dt.datetime, start_no: int):
     """Wplaty odbiorcow: czesc w terminie, czesc czesciowa, czesc wcale.
 
@@ -292,8 +314,12 @@ def build(db_path: pathlib.Path, base_moves_count: int, reserve_moves_count: int
     for (stockid, loccode), qty in balances.items():
         conn.execute("INSERT INTO locstock VALUES (?,?,?)", (stockid, loccode, qty))
 
+    # Zamowienia otwarte numerujemy za zrealizowanymi, zeby numeracja rosla.
+    open_orders = make_open_orders(rng, now, start_no=5001 + len(sales_orders), count=6)
+    sales_orders = sales_orders + open_orders
     conn.executemany("INSERT INTO salesorders VALUES (?,?,?,?,?,?,?)", sales_orders)
-    payments = make_payments(sales_orders, rng, now, start_no=9001)
+    # Wplaty dotycza wylacznie wydan, ktore juz zaszly.
+    payments = make_payments([o for o in sales_orders if o not in open_orders], rng, now, start_no=9001)
     conn.executemany("INSERT INTO debtortrans VALUES (?,?,?,?,?,?)", payments)
 
     conn.commit()

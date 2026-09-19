@@ -59,6 +59,9 @@ function defaultQueries(sql: string): unknown[] {
   if (sql.includes('group by o.customer_entity_id')) {
     return [{ customer_entity_id: 'ent-5', net: '120797.63', orders: '12' }]
   }
+  if (sql.includes('from wms_inventory_reservations r')) {
+    return [{ total: '5', masa: '24500' }]
+  }
   if (sql.includes('from sales_shipments s')) {
     return [{ total: '40', masa: '164910', bez_procesu: '0', bez_bdo: '0' }]
   }
@@ -233,6 +236,11 @@ describe('GET /api/sortownia/dashboard — dane', () => {
     const body = await readBody(await GET(makeRequest()))
     // Surowy odczyt `display_name` oddaje kryptogram i ląduje on na ekranie.
     expect(body.sales.topBuyers[0].nazwa).toBe('Stora Papier Recykling')
+  })
+
+  it('oddaje masę zarezerwowaną pod zamówienia', async () => {
+    const body = await readBody(await GET(makeRequest()))
+    expect(body.rezerwacje).toEqual({ count: 5, reservedKg: 24500 })
   })
 
   it('oddaje ewidencję przekazań odpadu', async () => {

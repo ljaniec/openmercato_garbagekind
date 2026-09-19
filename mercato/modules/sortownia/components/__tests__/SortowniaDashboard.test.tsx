@@ -68,6 +68,7 @@ const payload = {
       { nazwa: 'PlastMet Sp. z o.o.', netPln: 15002.25, orders: 9 },
     ],
   },
+  rezerwacje: { count: 5, reservedKg: 24500 },
   ewidencja: { cards: 40, massKg: 164910, withoutProcess: 0, withoutBdo: 0 },
   traceability: {
     lots: 95,
@@ -243,6 +244,19 @@ describe('SortowniaDashboard', () => {
     render(<SortowniaDashboard />)
     await screen.findByText('Na placu przyjęć')
     expect(screen.queryByText('Pochodzenie odpadu')).not.toBeInTheDocument()
+  })
+
+  it('odróżnia masę zarezerwowaną od wolnej — stary system znał tylko jedną liczbę', async () => {
+    render(<SortowniaDashboard />)
+    await screen.findByText('W boksach')
+    expect(screen.getByText('w tym 24,500 Mg zarezerwowane (5 zamówień)')).toBeInTheDocument()
+  })
+
+  it('bez rezerwacji mówi po prostu, że towar jest gotowy do wydania', async () => {
+    respondWith({ ...payload, rezerwacje: { count: 0, reservedKg: 0 } })
+    render(<SortowniaDashboard />)
+    await screen.findByText('W boksach')
+    expect(screen.getByText('Gotowe do wydania odbiorcom')).toBeInTheDocument()
   })
 
   it('pokazuje ewidencję przekazań odpadu', async () => {

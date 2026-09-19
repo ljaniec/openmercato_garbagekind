@@ -30,7 +30,7 @@ export type PaymentContext = {
 
 export type PaymentOutcome = {
   transno: number
-  action: 'create' | 'skip' | 'failed'
+  action: 'create' | 'skip' | 'failed' | 'mismatch'
   error?: string
 }
 
@@ -39,20 +39,30 @@ export function paymentReferenceFor(transno: number): string {
   return `ZAPL/${transno}`
 }
 
-export async function loadPaymentReferences(
+/**
+ * Wpłaty, które już weszły, wraz z zaksięgowaną kwotą.
+ *
+ * Kwota jest tu nie bez powodu. Import jest z założenia dopisujący: raz
+ * zaksięgowanej wpłaty nie nadpisujemy, bo dokument księgowy nie zmienia się
+ * po cichu. Ale jeżeli po stronie legacy kwota tej samej wpłaty jest już inna,
+ * to znaczy, że ktoś ruszył dane u źródła — i milczenie byłoby najgorszą
+ * z możliwych odpowiedzi. Zgłaszamy rozjazd zamiast go przemilczeć.
+ */
+export async function loadPaymentAmounts(
   em: EntityManager,
   scope: TenantScope,
-): Promise<Set<string>> {
+): Promise<Map<string, number>> {
   const rows = await em.find(SalesPayment, {
     organizationId: scope.organizationId,
     tenantId: scope.tenantId,
     paymentReference: { $like: 'ZAPL/%' },
   } as never)
-  return new Set(
-    (rows as Array<{ paymentReference?: string | null }>)
-      .map((row) => row.paymentReference)
-      .filter((value): value is string => Boolean(value)),
-  )
+  const index = new Map<string, number>()
+  for (const row of rows as Array<{ paymentReference?: string | null; amount?: string | number | null }>) {
+    if (!row.paymentReference) continue
+    index.set(row.paymentReference, Number.parseFloat(String(row.amount ?? '0')))
+  }
+  return index
 }
 
 /** `orderId` → `invoiceId`, bo alokacja płatności celuje w fakturę, nie w zamówienie. */
@@ -83,13 +93,23 @@ export async function applyPayments(
   ctx: PaymentContext,
   rows: LegacyPaymentRow[],
 ): Promise<{ outcomes: PaymentOutcome[] }> {
-  const seen = await loadPaymentReferences(ctx.em, ctx.scope)
+  const seen = await loadPaymentAmounts(ctx.em, ctx.scope)
   const invoiceByOrder = await loadInvoiceByOrder(ctx.em, ctx.scope)
   const outcomes: PaymentOutcome[] = []
 
   for (const row of rows) {
     const reference = paymentReferenceFor(row.transno)
     if (seen.has(reference)) {
+      const zaksiegowana = seen.get(reference) ?? 0
+      // Tolerancja groszowa: kwoty jadą przez numeric(18,4) i float.
+      if (Math.abs(zaksiegowana - row.kwotaBrutto) > 0.01) {
+        outcomes.push({
+          transno: row.transno,
+          action: 'mismatch',
+          error: `zaksięgowano ${zaksiegowana.toFixed(2)}, w systemie legacy jest ${row.kwotaBrutto.toFixed(2)}`,
+        })
+        continue
+      }
       outcomes.push({ transno: row.transno, action: 'skip' })
       continue
     }
@@ -127,7 +147,7 @@ export async function applyPayments(
         },
         ctx: ctx.commandContext,
       })
-      seen.add(reference)
+      seen.set(reference, row.kwotaBrutto)
       outcomes.push({ transno: row.transno, action: 'create' })
     } catch (error) {
       outcomes.push({

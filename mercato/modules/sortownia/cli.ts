@@ -27,6 +27,7 @@ import { applySalesOrders } from './lib/salesOrders'
 import { applyPayments } from './lib/payments'
 import { ensureLots } from './lib/lots'
 import { applyTransferCards } from './lib/transferCards'
+import { applyReservations } from './lib/reservations'
 import { applyMovementBatch, type MovementContext } from './lib/movements'
 import { ensureTopology, loadLocationIndex } from './lib/topology'
 
@@ -162,7 +163,13 @@ const importCommand: ModuleCli = {
       console.log(`  zamówienia: pominięto (brak pliku albo kontrahentów)`)
     }
 
-    // 5. Karty przekazania odpadu — wysyłki na zamówieniach.
+    // 5. Karty przekazania odpadu — wysyłki na zamówieniach, które już wyjechały.
+    const movementsPath = movementsFile()
+    if (!(await fileExists(movementsPath))) throw new Error(`Brak księgi ruchów: ${movementsPath}`)
+    const fulfilledOrders = new Set<number>()
+    for await (const row of readMovements(movementsPath)) {
+      if (row.typ === 'WZ' && row.orderno) fulfilledOrders.add(row.orderno)
+    }
     if (salesOrderIndex.size > 0 && (await fileExists(ordersPath))) {
       const orderRows = await readOrders(ordersPath)
       const bdoByDebtor = new Map<string, string>()
@@ -179,6 +186,7 @@ const importCommand: ModuleCli = {
           commandContext,
           scope,
           orders: salesOrderIndex,
+          fulfilled: fulfilledOrders,
           bdoByDebtor,
           recoveryByStock,
           ownBdo: process.env.SORTOWNIA_BDO ?? '000000001',
@@ -187,7 +195,7 @@ const importCommand: ModuleCli = {
       )
       const created = result.outcomes.filter((o) => o.action === 'create').length
       const failedCards = result.outcomes.filter((o) => o.action === 'failed')
-      console.log(`  karty przekazania: ${orderRows.length} wydań (nowych kart ${created})`)
+      console.log(`  karty przekazania: ${fulfilledOrders.size} wydań zrealizowanych (nowych kart ${created})`)
       for (const outcome of failedCards.slice(0, 5)) console.log(`    ! KPO/${outcome.orderno}: ${outcome.error}`)
     }
 
@@ -201,15 +209,17 @@ const importCommand: ModuleCli = {
       )
       const created = result.outcomes.filter((o) => o.action === 'create').length
       const failedPayments = result.outcomes.filter((o) => o.action === 'failed')
-      console.log(`  wpłaty: ${rows.length} pozycji (nowych ${created}, istniejących ${result.outcomes.length - created - failedPayments.length})`)
+      const mismatches = result.outcomes.filter((o) => o.action === 'mismatch')
+      console.log(`  wpłaty: ${rows.length} pozycji (nowych ${created}, istniejących ${result.outcomes.length - created - failedPayments.length - mismatches.length})`)
+      for (const outcome of mismatches) {
+        console.log(`    ⚠ wpłata ${outcome.transno}: ${outcome.error} — dane u źródła zostały zmienione po imporcie`)
+      }
       for (const outcome of failedPayments.slice(0, 5)) console.log(`    ! wpłata ${outcome.transno}: ${outcome.error}`)
     } else {
       console.log('  wpłaty: pominięto (brak pliku albo zamówień)')
     }
 
     // 7. Księga ruchów — kanał plikowy, zapis przez komendy WMS.
-    const movementsPath = movementsFile()
-    if (!(await fileExists(movementsPath))) throw new Error(`Brak księgi ruchów: ${movementsPath}`)
 
     const { warehouse, byCode } = await loadLocationIndex(em, scope)
     if (!warehouse) throw new Error('Magazyn nie powstał — przerwano.')
@@ -252,6 +262,34 @@ const importCommand: ModuleCli = {
     const lotsFailed = lotResult.outcomes.filter((o) => o.action === 'failed')
     console.log(`  partie odpadu: ${lotResult.outcomes.length} przyjęć (nowych partii ${lotsCreated})`)
     for (const outcome of lotsFailed.slice(0, 5)) console.log(`    ! partia PZ/${outcome.stkmoveno}: ${outcome.error}`)
+
+    // 8. Rezerwacje pod zamówienia jeszcze niezrealizowane.
+    if (salesOrderIndex.size > 0 && (await fileExists(ordersPath))) {
+      const orderRows = await readOrders(ordersPath)
+      // Wydane = ma swój ruch WZ w księdze. Reszta czeka i ma być zablokowana.
+      const fulfilled = fulfilledOrders
+      const result = await applyReservations(
+        {
+          em,
+          commandBus,
+          commandContext,
+          scope,
+          warehouseId: warehouse.id,
+          fractions: movementContext.fractions,
+          orders: salesOrderIndex,
+          fulfilled,
+        },
+        orderRows,
+      )
+      const created = result.outcomes.filter((o) => o.action === 'create').length
+      const short = result.outcomes.filter((o) => o.action === 'insufficient')
+      const failedRes = result.outcomes.filter((o) => o.action === 'failed')
+      console.log(`  rezerwacje: ${orderRows.length - fulfilled.size} zamówień otwartych (nowych rezerwacji ${created})`)
+      for (const outcome of short) {
+        console.log(`    · zamówienie ${outcome.orderno}: brak pokrycia w magazynie — WMS odmówił rezerwacji`)
+      }
+      for (const outcome of failedRes.slice(0, 5)) console.log(`    ! zamówienie ${outcome.orderno}: ${outcome.error}`)
+    }
 
     let buffer: LegacyMovementRow[] = []
     let carry: LegacyMovementRow[] = []

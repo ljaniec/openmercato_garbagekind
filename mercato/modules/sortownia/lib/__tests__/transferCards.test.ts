@@ -23,7 +23,7 @@ function order(overrides: Partial<LegacyOrderRow> = {}): LegacyOrderRow {
   }
 }
 
-function makeCtx(options: { shipments?: unknown[] } = {}) {
+function makeCtx(options: { shipments?: unknown[]; fulfilled?: number[] } = {}) {
   const calls: Array<{ id: string; input: Record<string, unknown> }> = []
   const find = jest.fn(async (entity: unknown) => {
     const name = (entity as { name?: string })?.name ?? String(entity)
@@ -43,6 +43,8 @@ function makeCtx(options: { shipments?: unknown[] } = {}) {
       commandContext: {} as never,
       scope,
       orders: new Map([[5001, 'ord-1']]),
+      // Karta powstaje tylko dla wydania, które faktycznie zaszło.
+      fulfilled: new Set<number>(options.fulfilled ?? [5001, 9999]),
       bdoByDebtor: new Map([['D005', '000118340']]),
       recoveryByStock: new Map([['20 01 01', 'R3']]),
       ownBdo: '000000001',
@@ -109,6 +111,13 @@ describe('applyTransferCards', () => {
     const result = await applyTransferCards(ctx, [order()])
     expect(calls).toHaveLength(0)
     expect(result.outcomes[0].action).toBe('skip')
+  })
+
+  it('zamówienie jeszcze niewydane NIE dostaje karty — to byłoby poświadczenie nieprawdy', async () => {
+    const { ctx, calls } = makeCtx({ fulfilled: [] })
+    const result = await applyTransferCards(ctx, [order()])
+    expect(calls).toHaveLength(0)
+    expect(result.outcomes).toHaveLength(0)
   })
 
   it('wydanie bez zamówienia w Mercato nie dostaje karty po cichu', async () => {

@@ -82,9 +82,26 @@ describe('applyPayments', () => {
   })
 
   it('drugi przebieg nie księguje tej samej wpłaty dwa razy', async () => {
-    const { ctx, calls } = makeCtx({ payments: [{ paymentReference: 'ZAPL/9001' }] })
+    const { ctx, calls } = makeCtx({ payments: [{ paymentReference: 'ZAPL/9001', amount: '1979.70' }] })
     const result = await applyPayments(ctx, [payment()])
     expect(calls).toHaveLength(0)
+    expect(result.outcomes[0].action).toBe('skip')
+  })
+
+  it('zgłasza rozjazd, gdy kwota u źródła zmieniła się po zaksięgowaniu', async () => {
+    const { ctx, calls } = makeCtx({ payments: [{ paymentReference: 'ZAPL/9001', amount: '1979.70' }] })
+    const result = await applyPayments(ctx, [payment({ kwotaBrutto: 2500 })])
+    // Nie nadpisujemy dokumentu księgowego po cichu, ale milczenie byłoby
+    // najgorszą odpowiedzią: ktoś ruszył dane u źródła i trzeba to zobaczyć.
+    expect(calls).toHaveLength(0)
+    expect(result.outcomes[0].action).toBe('mismatch')
+    expect(result.outcomes[0].error).toContain('1979.70')
+    expect(result.outcomes[0].error).toContain('2500.00')
+  })
+
+  it('różnica groszowa nie jest rozjazdem — kwoty jadą przez numeric i float', async () => {
+    const { ctx } = makeCtx({ payments: [{ paymentReference: 'ZAPL/9001', amount: '1979.7000' }] })
+    const result = await applyPayments(ctx, [payment({ kwotaBrutto: 1979.705 })])
     expect(result.outcomes[0].action).toBe('skip')
   })
 

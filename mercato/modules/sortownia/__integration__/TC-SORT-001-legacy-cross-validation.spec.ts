@@ -36,6 +36,8 @@ type LegacyRow = {
   loccode: string
   iloscKg: number
   iloscMg: number
+  /** Numer zamówienia, które realizuje to wydanie; 0 dla PZ i SORT. */
+  orderno: number
 }
 
 type LegacyOrder = {
@@ -51,6 +53,7 @@ type DashboardPayload = {
   locations: Array<{ code: string; type: string; quantityKg: number | null; capacityKg: number | null; utilisation: number | null }>
   fractions: Array<{ sku: string; quantityKg: number }>
   movements: Array<{ type: string; legacyMoveNo: number | string | null }>
+  rezerwacje?: { count: number; reservedKg: number }
   ewidencja?: {
     cards: number
     massKg: number
@@ -127,6 +130,7 @@ async function readLegacyLedger(): Promise<LegacyRow[]> {
       loccode: (record.loccode ?? '').toUpperCase(),
       iloscKg: Number.parseFloat((record.ilosc_kg ?? '0').replace(',', '.')),
       iloscMg: Number.parseFloat((record.ilosc_mg ?? '0').replace(',', '.')),
+      orderno: Number.parseInt(record.orderno ?? '', 10) || 0,
     })
   }
   return rows
@@ -405,13 +409,46 @@ test.describe('TC-SORT-001 — zgodność Open Mercato z księgą systemu legacy
 
   test('każde wydanie ma kartę przekazania — przekazanie bez ewidencji jest bezprawne', async ({ request }) => {
     const orders = await readLegacyOrders()
+    const ledger = await readLegacyLedger()
+    // Kartę dostaje wydanie, które faktycznie zaszło — a nie każde zamówienie.
+    // Zamówienie z odbiorem za tydzień karty mieć nie może.
+    const wydane = new Set(ledger.filter((row) => row.typ === 'WZ').map((row) => row.orderno))
+    const zrealizowane = orders.filter((row) => wydane.has(row.orderno)).length
     const dashboard = await loadDashboard(request)
-    expect(dashboard.ewidencja?.cards).toBe(orders.length)
+    expect(dashboard.ewidencja?.cards).toBe(zrealizowane)
   })
 
-  test('masa na kartach zgadza się z masą zamówionych wydań', async ({ request }) => {
+  test('zamówienia otwarte mają zarezerwowaną masę, a nie samą obietnicę', async ({ request }) => {
     const orders = await readLegacyOrders()
-    const expectedKg = orders.reduce((sum, row) => sum + row.iloscKg, 0)
+    const ledger = await readLegacyLedger()
+    const wydane = new Set(ledger.filter((row) => row.typ === 'WZ').map((row) => row.orderno))
+    const otwarte = orders.filter((row) => !wydane.has(row.orderno))
+    const dashboard = await loadDashboard(request)
+    expect(otwarte.length, 'dane demo muszą zawierać zamówienia otwarte').toBeGreaterThan(0)
+    // Nie każde otwarte zamówienie da się zarezerwować: magazyn odmawia
+    // blokady masy, której nie ma. Dlatego sprawdzamy, że rezerwacje istnieją
+    // i że żadna nie przekracza liczby zamówień otwartych.
+    expect(dashboard.rezerwacje?.count ?? 0).toBeGreaterThan(0)
+    expect(dashboard.rezerwacje?.count ?? 0).toBeLessThanOrEqual(otwarte.length)
+  })
+
+  test('zarezerwowana masa nie przekracza tego, co leży w boksach', async ({ request }) => {
+    const dashboard = await loadDashboard(request)
+    const reserved = dashboard.rezerwacje?.reservedKg ?? 0
+    // Rezerwacja ponad stan oznaczałaby obietnicę bez pokrycia — dokładnie to,
+    // czemu rezerwacje mają zapobiegać.
+    expect(reserved).toBeLessThanOrEqual(dashboard.totals.binsKg + dashboard.totals.yardKg)
+  })
+
+  test('masa na kartach zgadza się z masą wydań, które faktycznie zaszły', async ({ request }) => {
+    const orders = await readLegacyOrders()
+    const ledger = await readLegacyLedger()
+    const wydane = new Set(ledger.filter((row) => row.typ === 'WZ').map((row) => row.orderno))
+    // Tylko zrealizowane: zamówienie otwarte karty nie ma, więc jego masa
+    // nie może się w tej sumie pojawić.
+    const expectedKg = orders
+      .filter((row) => wydane.has(row.orderno))
+      .reduce((sum, row) => sum + row.iloscKg, 0)
     const dashboard = await loadDashboard(request)
     expect(dashboard.ewidencja?.massKg ?? 0).toBeCloseTo(expectedKg, 1)
   })
