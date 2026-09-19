@@ -1,0 +1,13 @@
+{
+  "datasets.nav.group": "Physical AI",
+  "datasets.datasets.title": "Zbiory danych",
+  "datasets.datasets.subtitle": "Pochodzenie: z czego powstał zbiór i która polityka się na nim uczyła",
+  "datasets.datasets.empty": "Brak zbiorów danych.",
+  "datasets.role.demo": "Demonstracja",
+  "datasets.role.correction": "Demonstracja korekcyjna",
+  "datasets.role.failure": "Przykład negatywny",
+  "datasets.role.holdout": "Część ewaluacyjna",
+  "datasets.run.running": "W toku",
+  "datasets.run.succeeded": "Zakończony",
+  "datasets.run.failed": "Nieudany"
+}

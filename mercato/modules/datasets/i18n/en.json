@@ -1,0 +1,13 @@
+{
+  "datasets.nav.group": "Physical AI",
+  "datasets.datasets.title": "Datasets",
+  "datasets.datasets.subtitle": "Lineage: what a dataset was built from and which policy learned on it",
+  "datasets.datasets.empty": "No datasets.",
+  "datasets.role.demo": "Demonstration",
+  "datasets.role.correction": "Corrective demonstration",
+  "datasets.role.failure": "Negative example",
+  "datasets.role.holdout": "Held-out split",
+  "datasets.run.running": "Running",
+  "datasets.run.succeeded": "Succeeded",
+  "datasets.run.failed": "Failed"
+}

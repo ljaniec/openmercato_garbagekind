@@ -726,3 +726,136 @@ wsteczne dopuszczanie byłoby dokładnie tym, czemu ta warstwa ma zapobiegać.
   z deklaracją i go nie sprzątał, przez co drugie uruchomienie dowodu
   wywracało się na własnych śmieciach. Dowód wycofuje teraz sondę na koniec
   (wycofanie, nie DELETE — ślad po próbie zostaje).
+
+---
+
+**Faza 6 — moduł `datasets`** (w `mercato/modules/datasets`): zbiory danych
+i pochodzenie. Cztery tabele, cztery komendy, endpoint panelu, strona
+backendu, dwie komendy CLI, 41 testów jednostkowych.
+
+Moduł ma uczynić prawdziwym jedno zdanie: **dla dowolnej wersji polityki da
+się wskazać zbiór, a dla zbioru — listę epizodów źródłowych, i odwrotnie.**
+Bez tego regres jakości po treningu jest nie do zdiagnozowania: polityka v7
+zachowuje się gorzej od v6 i zostają dwie hipotezy — zmiana w danych albo
+zmiana w treningu — których nie da się rozdzielić.
+
+| Decyzja | Odrzucona alternatywa | Dlaczego |
+| --- | --- | --- |
+| Epizod z interwencją to `correction`, **nawet przy sukcesie** | rola z samego wyniku epizodu | epizod, w którym człowiek poprawił chwyt, wrzucony do `demo` uczy model, że tak właśnie ma wyglądać poprawny przebieg — to najczęstszy sposób, w jaki zbiór po cichu psuje następną wersję |
+| Tożsamością wersji zbioru jest odcisk zawartości | numer nadawany przy każdym budowaniu | przebudowanie z tych samych kryteriów nad niezmienioną księgą ma dać tę samą wersję; inaczej zdanie „polityka v7 uczyła się na zbiorze X w wersji 3" nie ma stabilnego odniesienia |
+| Podział na część ewaluacyjną liczony z identyfikatora epizodu | losowanie | losowanie dałoby przy każdym budowaniu inny podział, więc dwa przebiegi z tych samych kryteriów byłyby dwiema wersjami — co unieważnia deduplikację po odcisku |
+| Część ewaluacyjna wydzielana **przed** przypisaniem roli treningowej | najpierw rola, potem podział | epizod odłożony na ewaluację nie może być jednocześnie demonstracją treningową; inaczej wynik na części wydzielonej przestaje cokolwiek mówić |
+| Wersja budowana **z księgi** po kryteriach | z listy epizodów podanej przez wołającego | lista jest zapisem tego, co ktoś twierdzi, że wziął; budowanie z kryteriów czyni skład funkcją księgi i pozwala go odtworzyć |
+| Filtr rodziny embodimentu po stronie serwera | filtr w kryteriach wołającego | to nie jest preferencja, tylko warunek sensowności: dane z jednego sprzętu nie są danymi dla innego |
+| Przebieg treningowy jako osobna tabela | pole `dataset_version_id` na wersji polityki | z jednego zbioru wychodzi kilka polityk (ziarna, hiperparametry), a jedna polityka bywa dostrajana kolejno na dwóch zbiorach; pole nie uniesie żadnego z tych przypadków |
+| Wiązanie powstaje przy **domknięciu** przebiegu | przy jego rejestracji | przy rejestracji polityki jeszcze nie ma; wiązanie zapisywane po stronie rejestru polityk wymagałoby, żeby rejestr wiedział o zbiorach |
+| Przebieg udany **musi** wskazać wersję polityki | pole opcjonalne | to jest dziura w pętli: zbiór byłby źródłem czegoś, czego nie da się wskazać |
+| Przebieg nieudany może zostać zamknięty bez polityki | wymóg polityki zawsze | nieudany trening też jest informacją o zbiorze |
+| Skład zbioru to odniesienia do epizodów | kopia danych w tabeli | warunek trzeci raportu: bajty przebiegów nie przechodzą przez MikroORM |
+| Ostrzeżenia o składzie zamiast twardej odmowy | odmowa budowania złego zbioru | zbiór czysto korekcyjny bywa dokładnie tym, czego ktoś potrzebuje; odmowa zmuszałaby do obchodzenia systemu, a ostrzeżenie zapisane przy wersji wypływa przy diagnozie |
+| `datasets.train` osobno od `datasets.build` | jedno uprawnienie | zbiór zbudowany przypadkiem da się odbudować; wiązanie wpisane przypadkiem kłamie cicho |
+| Zbiór bez przebiegu **nie** łamie pętli | liczenie go jako dziury | świeżo zbudowany zbiór jest normalnym stanem; pętla jest zamknięta, gdy każda polityka ma skąd pochodzić i każdy zbiór ma z czego się składać |
+
+Uruchomienie:
+
+```bash
+./mercato/install.sh datasets
+cd /sciezka/do/open-mercato/apps/mercato
+yarn generate && yarn mercato db migrate
+yarn mercato auth sync-role-acls
+yarn mercato datasets prove    # dowód fazy
+yarn mercato datasets status
+```
+
+Ekran: `/backend/datasets`, uprawnienie `datasets.view`.
+
+### Dowód fazy 6
+
+Warunek zaliczenia brzmiał: *dla dowolnej wersji polityki da się wskazać
+zbiór, a dla zbioru — listę epizodów źródłowych, i odwrotnie.* „I odwrotnie"
+jest sprawdzane dosłownie: jedno zapytanie idzie od polityki do epizodów,
+drugie od epizodu do polityk, i oba muszą wskazać ten sam zbiór. Sprawdzenie
+w jedną stronę przeszłoby również dla modelu, w którym pochodzenie jest
+luźnym polem JSON.
+
+```
+DOWÓD FAZY 6 — pętla zamknięta w obie strony
+
+1) budowanie wersji zbioru z księgi epizodów
+   wersja 1, epizodów 247, odcisk 011d4216c38f, powtórka=false
+
+2) przebudowanie z tych samych kryteriów nad niezmienioną księgą
+   zwrócono wersję 1, powtórka=true
+
+3) przebieg treningowy i domknięcie pętli
+   próba zamknięcia przebiegu bez wskazania polityki → odbite: Przebieg zakończony
+     sukcesem musi wskazać wersję polityki, która z niego powstała.
+   przebieg train-mu8034cn zamknięty; powstała polityka pick-bin-ur10e v2
+
+4) od wersji polityki do epizodów źródłowych
+   pick-bin-ur10e v2 ← bin-picking-ur10e v1: 247 epizodów (27 korekcyjnych)
+
+5) od pojedynczego epizodu do polityk, które się na nim uczyły
+   epizod 00bec9e3… (rola correction) →
+     bin-picking-ur10e v1 → pick-bin-ur10e v2
+   obie strony wskazują tę samą politykę: true
+
+6) pętla dla całej instancji
+   wersje polityki bez wskazanego zbioru: 2 (insert-peg-fr3 v1, pick-bin-ur10e v1)
+   wersje zbioru bez epizodów: 0
+```
+
+Punkt 2 jest tym, który odróżnia rejestr zbiorów od katalogu plików: licznik
+wersji nie drgnął, mimo że komenda wykonała się normalnie. Punkt 6 jest
+celowo niepełny i to jest właściwy wynik — `insert-peg-fr3 v1`
+i `pick-bin-ur10e v1` zostały wgrane ręcznie w fazie 1, zanim potok treningowy
+istniał. Platforma mówi o nich wprost zamiast udawać, że pochodzenie jest znane.
+
+Ścieżka sieciowa, konto `employee` (`datasets.view`, `datasets.build`, bez
+`datasets.train`):
+
+```
+GET /api/datasets/datasets  →  200
+totals: {"datasetVersions": 1, "trainingRuns": 1, "loopClosed": false,
+         "policiesWithoutDataset": 2, "datasetsWithoutEpisodes": 0,
+         "datasetsWithoutPolicy": 0}
+orphanPolicies: ['insert-peg-fr3 v1', 'pick-bin-ur10e v1']
+  bin-picking-ur10e v1 ep=247 {"demo": 165, "correction": 27, "failure": 4,
+                               "holdout": 51} odcisk=011d4216c38f
+     przebieg train-mu8034cn succeeded -> pick-bin-ur10e v2
+  odwrotnie: pick-bin-ur10e v2 <- 1 wersji zbioru, 247 epizodow
+```
+
+`loopClosed: false` z nazwanymi sierotami jest uczciwszą odpowiedzią niż
+zielony wskaźnik: endpoint nie zlicza dwóch różnych dziur razem, bo polityka
+bez zbioru i zbiór bez epizodów to dwa różne problemy.
+
+## Stan po fazach 0–6
+
+Osiem modułów, 25 tabel, 329 testów jednostkowych. Łańcuch, który przechodzi
+przez wszystkie fazy, wygląda tak:
+
+```
+fleet          co istnieje i czy wolno mu pracować
+  ↓
+edge           kto się odzywa i czym to udowadnia
+  ↓
+policy_registry  co to za polityka i na czym wolno ją uruchomić
+  ↓
+safety         czy wolno ją uruchomić w tej KLASIE celi
+  ↓
+deployment     ten robot ma uruchomić tę wersję, na tak długo
+  ↓
+episodes       co zrobił i kto przerwał
+  ↓
+rollout        czy iść dalej, czy wycofać — z liczb, nie z opinii
+  ↓
+datasets       z czego to się wzięło i co z tego powstanie
+```
+
+Kierunek strzałek jest kierunkiem zależności i jest jednostronny w każdym
+ogniwie poza jednym: `deployment → safety` został dołożony w fazie 5, bo
+dopuszczenie musi być warunkiem wstępnym przypisania, a nie jego skutkiem
+ubocznym. Wszystkie pozostałe moduły działają bez tych, które są pod nimi:
+rejestr floty bez jednej polityki, rejestr polityk bez jednego wdrożenia,
+księga epizodów bez wdrożenia etapowego.
