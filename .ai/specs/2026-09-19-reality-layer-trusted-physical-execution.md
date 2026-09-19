@@ -674,6 +674,841 @@ Adapters translate \`AuthorizedPhysicalTask\` to their robotics application/brid
 
 The same executor identifier may denote a robot application or cell rather than a single arm. That is intentional.
 
+## I. VLM and evidence contract
+
+The VLM team owns perception/model execution. Reality Layer owns only evidence ingestion semantics.
+
+### I.1 Boundary
+
+\`\`\`text
+camera / detector / VLM / human / second robot
+                    |
+                    | Observation
+                    v
+             evidence adapter
+                    |
+                    | EvidenceInput
+                    v
+             EvidenceEnvelope
+                    |
+                    v
+               RealityDiff
+\`\`\`
+
+A VLM claim is never converted directly into an ERP mutation.
+
+### I.2 \`EvidenceInput\`
+
+\`\`\`ts
+export type EvidenceInput = Readonly<{
+  sourceKind: 'executor' | 'camera' | 'vlm' | 'barcode' | 'tag' | 'measurement' | 'human' | 'robot' | 'other'
+  sourceId: string
+  evidenceType:
+    | 'object_detected'
+    | 'object_identity'
+    | 'object_location'
+    | 'task_completion_observation'
+    | 'barcode_or_tag_observation'
+    | 'visual_inspection_result'
+    | string
+  observedAt: string
+  claim: Readonly<Record<string, unknown>>
+  confidence?: number
+  artifactRefs?: readonly string[]
+  externalEventId: string
+  provenance?: Readonly<{
+    producerVersion?: string
+    modelId?: string
+    modelVersion?: string
+    sensorId?: string
+  }>
+}>
+\`\`\`
+
+Validation rules:
+
+- Zod schema selected by \`evidenceType\`; unknown future types are rejected unless explicitly registered.
+- confidence is optional and bounded \([0,1]\); absence is not interpreted as certainty.
+- timestamps have bounded skew policy; stale evidence is stored but cannot satisfy a “fresh evidence” policy.
+- artifact references are opaque IDs only; no raw credentials, signed URLs or large binary payloads.
+- one source/external-event identity maps to at most one envelope.
+- evidence creation is append-only.
+
+### I.3 Performer vs verifier
+
+The model supports evidence-policy rules such as:
+
+\`\`\`text
+require independent verifier:
+  performer executor id != verifier source id
+\`\`\`
+
+This is not required for the first MVP path. It is the preferred stretch demo: A1XY-1 performs, LeRobot-1/VLM observes, disagreement moves the diff to \`NEEDS_EVIDENCE\` rather than auto-merging.
+
+### I.4 Conflicting evidence
+
+Evidence resolution is deterministic policy, not LLM judgment. For MVP:
+
+- one supported destination claim and no contradiction → diff may be \`PROPOSED\`;
+- contradictory location claims within the same freshness window → \`NEEDS_EVIDENCE\`;
+- performer says success but observation says different destination → diff reflects observed destination and is marked conflict/unexpected;
+- confidence alone never overrides a conflicting independent claim.
+
+A future policy engine can add thresholds/quorums, but there is no universal “highest confidence wins” rule.
+
+## J. API design
+
+All routes are organization-scoped, Zod-validated, export current Open Mercato per-method \`metadata\` and \`openApi\`, and use the command bus for mutations. Custom action routes use \`runRouteMutationGuards\` (or the equivalent current mutation-guard registry contract) before command execution.
+
+### J.1 MVP routes
+
+| Method | Path | Input / output | Required feature | Semantics | Idempotency |
+|---|---|---|---|---|---|
+| GET | \`/api/reality_layer/intents\` | bounded filters/page → intents | \`reality_layer.intent.view\` | query | N/A |
+| POST | \`/api/reality_layer/intents\` | typed move-object intent + client UUID \`idempotencyKey\` → intent + gate result | \`reality_layer.intent.create\` | command \`reality_layer.intent.create\` | unique origin/idempotency key |
+| GET | \`/api/reality_layer/intents/[id]\` | id → intent + current gate summary | \`reality_layer.intent.view\` | query | N/A |
+| POST | \`/api/reality_layer/intents/[id]/grants\` | executor, expiry, idempotency key → grant + re-evaluated gate | \`reality_layer.authorization.grant\` | command \`reality_layer.authorization.grant\` | scope digest + idempotency key |
+| POST | \`/api/reality_layer/intents/[id]/dispatch\` | executor + idempotency key; dev-only mock scenario → 202 + execution id | \`reality_layer.execution.dispatch\` | command + enqueue | one ExecutionRecord per dispatch key |
+| GET | \`/api/reality_layer/executors\` | optional intent id → descriptors/capability result | \`reality_layer.executor.view\` | query | N/A |
+| GET | \`/api/reality_layer/intents/[id]/evidence\` | paged evidence | \`reality_layer.evidence.view\` | query | N/A |
+| GET | \`/api/reality_layer/diffs\` | paged/filter by intent/status | \`reality_layer.diff.view\` | query | N/A |
+| GET | \`/api/reality_layer/diffs/[id]\` | diff + evidence references | \`reality_layer.diff.view\` | query | N/A |
+| POST | \`/api/reality_layer/diffs/[id]/decision\` | \`reject|request_more_evidence\` + idempotency key | \`reality_layer.reconciliation.decide\` | command | terminal/current-state guarded |
+| POST | \`/api/reality_layer/diffs/[id]/merge\` | idempotency key → merge result | \`reality_layer.reconciliation.decide\` **and** \`wms.adjust_inventory\` for MVP adapter | command → downstream command | RealityDiff UUID is downstream WMS reference id |
+| GET | \`/api/reality_layer/intents/[id]/provenance\` | causal graph/timeline | \`reality_layer.intent.view\` | query composed from module rows + ActionLog service | N/A |
+
+The merge route is separate from reject/request-more-evidence so the static route ACL can require the downstream WMS feature only on the operation that can mutate inventory.
+
+### J.2 Optional external evidence ingress
+
+Stretch route:
+
+| Method | Path | Input | Feature | Additional rule |
+|---|---|---|---|---|
+| POST | \`/api/reality_layer/executions/[id]/evidence\` | \`EvidenceInput\` | \`reality_layer.evidence.submit\` | authenticated human/service principal plus source binding; never exposed as AI tool |
+
+The MockExecutor does not need this route; its worker records evidence internally through the same \`EvidenceRecorder\` service/command.
+
+### J.3 WMS effect mapping
+
+For the move-object vertical slice, \`RealityDiff.effectInputJson\` resolves to the current \`inventoryMoveSchema\` shape. On merge:
+
+\`\`\`ts
+{
+  warehouseId,
+  fromLocationId,
+  toLocationId,
+  catalogVariantId,
+  lotId?,
+  serialNumber?,
+  quantity,
+  type: 'transfer',
+  reason: 'Reality Layer accepted physical reconciliation',
+  referenceType: 'manual',
+  referenceId: realityDiff.id,
+  performedBy: reconciliationHumanUserId,
+  metadata: {
+    realityIntentId,
+    realityExecutionId,
+    realityDiffId,
+  },
+  tenantId,
+  organizationId,
+}
+\`\`\`
+
+The current WMS command derives a movement idempotency key including \`referenceType\`, \`referenceId\` and movement facts. Therefore if WMS succeeds and Reality Layer crashes before marking the diff \`MERGED\`, retrying the same merge returns the existing WMS movement rather than duplicating stock movement.
+
+Immediately before calling WMS, Reality Layer re-reads the relevant business state and compares it with the snapshot/digest used to construct the diff. Stale state fails closed and moves/keeps the diff in evidence/review flow; it does not blindly apply an old delta.
+
+### J.4 OpenAPI / MCP implications
+
+Every route receives full \`OpenApiRouteDoc\` metadata. OpenAPI documentation does not itself grant AI authority. Typed \`ai-tools.ts\` controls the intended agent tool surface. High-risk grant/merge routes additionally reject non-human principals server-side, so accidental discovery by an AI/API client does not create a bypass.
+
+## K. Event design
+
+Declare only lifecycle events needed by optional integrations/UI. Events do not drive the core state machine; commands/worker logic do.
+
+\`\`\`ts
+const events = [
+  { id: 'reality_layer.intent.blocked', entity: 'intent', category: 'lifecycle', clientBroadcast: true },
+  { id: 'reality_layer.intent.authorized', entity: 'intent', category: 'lifecycle', clientBroadcast: true },
+  { id: 'reality_layer.execution.finished', entity: 'execution', category: 'lifecycle', clientBroadcast: true },
+  { id: 'reality_layer.evidence.recorded', entity: 'evidence', category: 'lifecycle', clientBroadcast: true },
+  { id: 'reality_layer.diff.proposed', entity: 'diff', category: 'lifecycle', clientBroadcast: true },
+  { id: 'reality_layer.diff.merged', entity: 'diff', category: 'lifecycle', clientBroadcast: true },
+] as const
+\`\`\`
+
+They are registered with \`createModuleEvents({ moduleId: 'reality_layer', events })\`.
+
+Payloads contain only IDs, scope, status/reason codes, and timestamps—not arbitrary evidence bodies or credentials. Persistent delivery is used where workflows/AO may depend on the event; every subscriber must be idempotent. UI refresh can use the existing client event bridge.
+
+## L. UI
+
+The HackOn UI is intentionally two pages.
+
+### L.1 Reality Layer dashboard
+
+\`/backend/reality-layer\`
+
+Use Open Mercato \`DataTable\` with stable entity ID/table extension ID. Columns:
+
+- intent ID / subject;
+- requested action;
+- status;
+- selected executor;
+- latest gate result;
+- created time;
+- originator kind.
+
+Actions:
+- create move-object intent (via \`CrudForm\` or a CrudForm-compatible create flow);
+- open detail.
+
+### L.2 Intent detail
+
+\`/backend/reality-layer/intents/[id]\`
+
+One page, not six separate screens. Sections:
+
+1. semantic intent;
+2. Reality Gate checks;
+3. authorization grants;
+4. execution attempts;
+5. evidence list;
+6. RealityDiff/reconciliation;
+7. provenance activity feed.
+
+Use shared \`StatusBadge\`, \`Alert\`, \`ActivityFeed\`, \`DataTable\`, \`Button\`, \`useConfirmDialog\`, i18n, and semantic design-system tokens. All action writes use \`useGuardedMutation\` plus \`apiCall\`/canonical helpers—no raw \`fetch\`.
+
+The mock scenario selector appears only in development/demo mode when executor kind is \`mock\`.
+
+The key judge-facing moment is explicit UI state:
+
+\`\`\`text
+Execution: SUCCEEDED
+Evidence: received
+Business state: UNCHANGED
+RealityDiff: PROPOSED
+[Merge into business reality]
+\`\`\`
+
+### L.3 Frontend boundary
+
+Keep route pages/server metadata small. Interactive lifecycle actions live in focused client components; do not turn the entire backend page into one client blob. No new provider/global shell code is required. The implementation PR must include the current Open Mercato frontend architecture/performance checks required for touched backend pages.
+
+## M. Audit and provenance
+
+### M.1 Causal graph
+
+The target navigation is:
+
+\`\`\`text
+WMS InventoryMovement / business mutation
+          ^
+          | referenceId = RealityDiff.id
+          |
+RealityDiff -- merge ActionLog
+          ^
+          |
+EvidenceEnvelope(s)
+          ^
+          |
+ExecutionRecord
+          ^
+          |
+AuthorizationGrant(s)
+          ^
+          |
+PhysicalIntent -- create ActionLog
+          ^
+          |
+human / AI pending action / AO proposal+run / workflow
+\`\`\`
+
+Reality Layer persists foreign IDs, never cross-module ORM relations.
+
+### M.2 Canonical audit
+
+Every Reality Layer mutation is a registered command with \`buildLog\` metadata:
+
+- resource kind/id;
+- tenant/org;
+- actor;
+- parent/related Reality Layer resource IDs;
+- before/after snapshots where safe;
+- reason/status codes;
+- provenance IDs.
+
+For agent-originated commands, the existing \`CommandRuntimeContext.runAs\`/ActionLog path remains the source of actor/on-behalf-of attribution. Reality Layer does not invent “agent audit” fields that compete with it.
+
+### M.3 Provenance endpoint
+
+The provenance query composes:
+
+- module-owned rows;
+- command/action-log references through the audit service/API;
+- origin context IDs;
+- downstream business movement ID.
+
+It never reads another module's tables through direct ORM imports.
+
+## N. Failure semantics
+
+The physical world and database cannot share one atomic transaction. Failure behavior is therefore explicit.
+
+| Case | Required behavior | MVP? |
+|---|---|---|
+| Executor never starts | queued attempt becomes \`ABANDONED\` or pre-start \`FAILED\`; no physical success inferred; intent may return to authorized/blocked after fresh gate | MUST |
+| Started then fails | \`FAILED\`; preserve any evidence; no business mutation | MUST |
+| Timeout | \`TIMED_OUT\`; later callback becomes late evidence only | MUST |
+| Disconnect | failure/timeout code; credential/liveness must be rechecked before retry | SHOULD |
+| Duplicate completion | dedupe by external event ID; terminal execution state unchanged | MUST |
+| Late completion | append evidence tagged late; never rewrite terminal result or auto-merge | MUST |
+| Out-of-order evidence | append; diff builder reasons from timestamps/provenance, not arrival order | MUST |
+| Physical success, merge fails | diff \`MERGE_FAILED\`; retry downstream effect idempotently | MUST |
+| ERP cancellation after physical start | cancellation does not pretend rollback; execution continues to terminal and requires reconciliation/compensation | MUST policy, UI may defer |
+| Unexpected physical outcome | evidence reflects actual claim; diff shows actual observed target; business state unchanged until human decision | MUST |
+| Conflicting evidence | \`NEEDS_EVIDENCE\`; merge blocked | MUST |
+| Grant expires while queued | worker re-runs gate before start; execution not started | MUST |
+| Queue abandons job before handler | worker \`onJobAbandoned\` reports idempotently; domain staleness sweep is post-hackathon hardening | MUST basic |
+| Diff snapshot stale before merge | 409/fail closed; no downstream command; rebuild/review | MUST |
+| Downstream WMS succeeds, RL final status write fails | merge retry uses same diff UUID reference and resolves existing WMS movement | MUST |
+
+### N.1 Compensation
+
+Compensation is not generic undo. Future compensation is a new PhysicalIntent (e.g. move object back) linked to the failed/original intent. For MVP, UI displays “manual/compensation required” but does not auto-command a reverse motion.
+
+## O. Formal model seed
+
+### O.1 Smallest transition system
+
+Do not formalize ROS, trajectories, kinematics, VLM internals or WMS arithmetic. Formalize only:
+
+\`\`\`text
+ActorId, ExecutorId, IntentId, EvidenceId, DiffId
+IntentStatus
+ExecutionStatus
+DiffStatus
+Grant(valid, actor, executor, scope, expiry)
+Evidence(source, provenance)
+BusinessEffect(diffId)
+\`\`\`
+
+Actions:
+
+- \`CreateIntent\`
+- \`EvaluateGate\`
+- \`Grant\`
+- \`Dispatch\`
+- \`StartExecution\`
+- \`FinishExecution\`
+- \`RecordEvidence\`
+- \`ProposeDiff\`
+- \`RequestEvidence\`
+- \`RejectDiff\`
+- \`MergeDiff\`
+- \`DuplicateExternalEvent\`
+
+### O.2 Target invariants
+
+1. **Authorization before start**  
+   \`StartExecution(i,e) ⇒\` a valid gate result and non-expired matching grant existed immediately before start.
+
+2. **No self-authorization**  
+   every valid grant has a human grantor distinct from the intent originator principal.
+
+3. **Execution is not mutation**  
+   \`ExecutionStatus = SUCCEEDED\` alone does not change \`BusinessState\`.
+
+4. **Evidence is not truth**  
+   \`RecordEvidence\` alone does not change \`BusinessState\`.
+
+5. **Reconciliation witness**  
+   every business mutation caused by physical observation has a corresponding accepted merge attempt for a RealityDiff.
+
+6. **At-most-once business effect**  
+   duplicate/retried merge for the same diff produces at most one logical downstream business movement.
+
+7. **Failure cannot silently succeed**  
+   a failed execution cannot transition to \`SUCCEEDED\` without a distinct new execution attempt.
+
+8. **Provenance totality**  
+   every evidence row accepted into a diff has source identity and timestamp; every merged diff refers to evidence.
+
+9. **Independent verification**  
+   when policy requires independent verification, the performer executor identity differs from the qualifying verifier source identity.
+
+10. **Terminal monotonicity**  
+    terminal execution and terminal diff states never reopen through duplicate/late events.
+
+### O.3 Verification strategy
+
+- First: pure TypeScript transition/gate functions + exhaustive small-state tests.
+- TLA+ or a small explicit model checker is well suited to duplicate/reordered/late event schedules and crash points around merge.
+- Lean 4 is the target for inductive reachability proofs of invariants 1–10 over the abstract transition relation.
+- The Lean model should model idempotency as a logical effect set keyed by diff ID, not PostgreSQL/WMS implementation details.
+
+## P. Protocol extraction
+
+### P.1 Open Mercato-specific implementation concepts
+
+- feature-based RBAC IDs;
+- \`auth.User.kind\`;
+- \`CommandBus\` / \`ActionLog\`;
+- \`prepareMutation\` / \`AiPendingAction\`;
+- AO proposals/dispositions/effectors;
+- workflows USER_TASK / WAIT_FOR_SIGNAL;
+- Open Mercato queue worker metadata;
+- WMS \`wms.inventory.move\`;
+- OpenAPI/AI-tool generation;
+- DataTable/CrudForm/UI details.
+
+### P.2 Candidate vendor-neutral protocol semantics
+
+Potentially portable:
+
+- \`PhysicalIntent\`;
+- \`CapabilityDescriptor\`;
+- \`AuthorizationContext\` / grant reference;
+- \`ExecutionAcknowledgement\` / execution attempt;
+- \`EvidenceEnvelope\`;
+- \`RealityDiff\`;
+- standardized failure codes;
+- \`CompensationRequest\`.
+
+The protocol should describe semantic messages and invariants, not dictate HTTP/MQTT/ROS 2. Transport binding is a later layer.
+
+## Q. Tests
+
+### Q.1 Unit tests
+
+Minimum cases:
+
+1. gate rejects structurally/source-invalid intent;
+2. gate rejects capability mismatch;
+3. gate rejects missing/expired grant;
+4. grant command rejects agent/service grantor;
+5. grant command rejects same originator/grantor;
+6. grant scope digest cannot authorize modified intent;
+7. legal/illegal state transitions;
+8. executor registry returns only compatible descriptors;
+9. MockExecutor SUCCESS/FAILURE/UNEXPECTED_RESULT contract;
+10. EvidenceInput validation and duplicate event collapse;
+11. conflicting evidence → \`NEEDS_EVIDENCE\`;
+12. RealityDiff WMS mapping is deterministic;
+13. stale business snapshot blocks merge;
+14. downstream input uses \`referenceId = diff.id\`.
+
+### Q.2 Integration/API tests
+
+Use module-local \`__integration__\` and Open Mercato integration helpers.
+
+Critical vertical-slice test:
+
+1. create WMS fixture item at STORAGE-A;
+2. operator creates PhysicalIntent;
+3. assert status \`BLOCKED\`, no execution;
+4. same operator tries grant → rejected;
+5. supervisor grants exact executor/action/destination;
+6. gate becomes \`AUTHORIZED\`;
+7. dispatch MockExecutor SUCCESS;
+8. drain queue;
+9. execution \`SUCCEEDED\`, evidence exists, diff \`PROPOSED\`;
+10. assert WMS/business state is **still STORAGE-A**;
+11. supervisor merges diff;
+12. assert one WMS movement and destination REPAIR-BENCH;
+13. retry merge;
+14. assert still exactly one logical movement;
+15. provenance endpoint links WMS movement back to diff/evidence/execution/grant/intent/origin.
+
+Security/integrity integration tests:
+
+- cross-tenant intent/evidence/diff IDs return scoped 404/no oracle;
+- agent principal cannot create grant even with feature;
+- agent principal cannot merge diff even with feature;
+- expired grant while job waits prevents executor start;
+- duplicate queue job is no-op after terminal attempt;
+- duplicate executor external event creates no second evidence row;
+- late success after timeout creates evidence but does not mutate execution/business status;
+- unexpected destination never auto-updates ERP;
+- conflicting witness prevents merge;
+- missing optional \`fleet/edge/safety/vision\` modules does not break MockExecutor baseline.
+
+### Q.3 Executor contract suite
+
+A reusable suite runs against every adapter:
+
+- stable descriptor;
+- deterministic capability result for declared fixtures;
+- same idempotency key never intentionally launches two logical tasks;
+- abort/timeout mapping;
+- no business credentials visible to adapter;
+- evidence carries source/provenance;
+- transport errors map to bounded failure codes.
+
+MockExecutor must pass the suite first; A1XY/LeRobot adapters are accepted only when they pass the same suite.
+
+## R. Implementation plan
+
+Every phase ends in a runnable/testable application. No core patch is planned.
+
+### M0 — architecture/spec gate **(current branch)**
+
+1. repository analysis against pinned Open Mercato SHA;
+2. complete this blueprint;
+3. adversarial second pass;
+4. human review/approval.
+
+**Exit:** reviewed spec. No implementation before exit.
+
+### M1 — module skeleton + persistence
+
+1. add \`reality_layer\` module metadata/ACL/setup/DI;
+2. add five entities + migration + Zod validators;
+3. register commands for create/grant/state transitions;
+4. unit-test tenant/org scoping and legal transitions.
+
+**Exit:** create/query an intent and grant in an app with no robotics modules.
+
+### M2 — Reality Gate
+
+1. pure deterministic gate service;
+2. business source-state adapter for WMS vertical slice;
+3. executor registry/capability check;
+4. Mock credential provider;
+5. scoped grant policy + expiry/no-self-authorization.
+
+**Exit:** deterministic BLOCKED → grant → AUTHORIZED flow.
+
+### M3 — MockExecutor + asynchronous dispatch
+
+1. executor types/registry + MockExecutor;
+2. queue helper + \`execution.worker.ts\`;
+3. dispatch command creates ExecutionRecord before enqueue;
+4. worker re-runs gate immediately before start;
+5. \`onJobAbandoned\` mapping;
+6. SUCCESS/FAILURE/UNEXPECTED_RESULT tests.
+
+**Exit:** no physical robot required; complete execution ledger.
+
+### M4 — evidence + RealityDiff
+
+1. append-only evidence command/service;
+2. executor result → distinct executor evidence;
+3. evidence conflict/freshness policy;
+4. deterministic RealityDiff builder;
+5. diff query/detail APIs.
+
+**Exit:** robot can say DONE while ERP truth remains unchanged.
+
+### M5 — reconciliation/WMS business effect
+
+1. decision command;
+2. WMS move effect adapter using \`referenceId = diff.id\`;
+3. stale business-state recheck;
+4. merge failure/retry semantics;
+5. exact-once logical movement integration tests.
+
+**Exit:** explicit human merge is the only path that updates WMS.
+
+### M6 — HackOn UI + provenance
+
+1. dashboard DataTable;
+2. intent detail with gate/grant/execution/evidence/diff;
+3. mock outcome selector in demo mode;
+4. ActivityFeed/provenance graph;
+5. guarded mutations, i18n, OpenAPI, design-system checks.
+
+**Exit:** complete judge-facing vertical slice.
+
+### M7 — AI surface
+
+1. safe read tools;
+2. \`create_physical_intent\` mutation tool through current AI mutation approval path;
+3. no grant/merge/force tools;
+4. tests showing agent cannot self-grant or merge.
+
+**Exit:** AI can request, not authorize physical authority.
+
+### M8 — A1XY adapter
+
+Thin bridge implementation below \`PhysicalExecutor\`; no domain changes.
+
+### M9 — LeRobot/VLM evidence adapter
+
+Add second hardware adapter and/or external evidence source. Prefer performer/witness demo over multi-robot motion planning.
+
+### M10 — formal model seed
+
+1. encode abstract states/actions in Lean 4;
+2. prove authorization-before-start, no-self-grant, no-evidence-to-truth;
+3. model/exhaust duplicate/late event schedules in a finite checker/TLA+ if useful;
+4. connect executable state transition tests to the same transition table.
+
+## S. Hackathon cut line
+
+### MUST HAVE
+
+- M0 approved blueprint;
+- M1 five-entity domain + command/audit path;
+- M2 deterministic gate + scoped grant + no-self-authorization;
+- M3 MockExecutor queue path;
+- M4 append-only evidence + RealityDiff;
+- M5 explicit WMS merge with retry idempotency;
+- M6 minimal dashboard/detail/provenance UI;
+- one complete integration test proving “execution succeeded, business state unchanged until merge”;
+- duplicate completion/merge and cross-tenant/no-self-authorization tests.
+
+### SHOULD HAVE
+
+- M7 safe AI intent creation/read surface;
+- external evidence ingress boundary;
+- first Lean 4 transition-system seed;
+- optional \`edge\` credential/liveness adapter or \`fleet\` capability adapter.
+
+### STRETCH
+
+- A1XY executor;
+- LeRobot executor;
+- VLM evidence;
+- independent performer/witness policy;
+- Agent Orchestrator proposal→intent adapter;
+- workflow waiting/signalling demo.
+
+### POST-HACKATHON
+
+- generalized business-effect adapter catalog;
+- compensation intent semantics;
+- durable stale-operation sweeper/operational monitoring;
+- protocol versioning and transport bindings;
+- richer evidence policies;
+- full formal proof suite/model checking;
+- vendor-neutral whitepaper/specification.
+
+## T. Open questions
+
+These do not block writing the blueprint; they are the explicit human-review decisions before/while implementation proceeds.
+
+1. **Business fixture:** should HackOn use existing WMS catalog variant/location IDs directly for PART-17/STORAGE-A/REPAIR-BENCH? **Recommendation: yes**, to reuse \`wms.inventory.move\`.
+2. **Two-person rule:** should a human who manually created an intent be forbidden from granting it, or is no-self-grant required only for AI/service origin? **Current safe default: forbid same principal for all origins.**
+3. **Restricted policy:** which concrete demo workspace/destination should intentionally require a grant? **Recommendation: REPAIR-BENCH.**
+4. **Executor registry:** static DI registrations vs configuration-driven registry for HackOn? **Recommendation: static DI first.**
+5. **External VLM ingress:** service-account HTTP evidence route vs local event/adapter? **Recommendation: service-account route only when VLM team needs process separation.**
+6. **Artifact storage:** which existing Open Mercato media/file abstraction should hold images/clips? Until selected, store only opaque references.
+7. **Object quantity:** represent PART-17 as quantity 1 of a WMS catalog variant, or add serial tracking for the demo? **Recommendation: quantity 1; serial only if existing fixture supports it cleanly.**
+8. **AO availability:** will HackOn environment include enterprise Agent Orchestrator? Core MVP must not depend on it either way.
+9. **Robot bridge:** A1XY/LeRobot direct SDK, ROS 2 service/action, or team-provided HTTP bridge? Adapter contract deliberately defers this.
+10. **Formal deliverable timing:** is a compiling Lean 4 seed part of HackOn judging or immediate post-hackathon? Architecture is unchanged.
+
+## Exact proposed code layout
+
+Source in this repository:
+
+\`\`\`text
+mercato/modules/reality_layer/
+  index.ts
+  acl.ts
+  setup.ts
+  di.ts
+  events.ts
+  ai-tools.ts                         # M7, not needed M1-M6
+
+  data/
+    entities.ts
+    validators.ts
+
+  commands/
+    index.ts
+    intents.ts
+    authorization.ts
+    executions.ts
+    evidence.ts
+    reconciliation.ts
+
+  lib/
+    types.ts
+    gate.ts
+    stateMachine.ts
+    queue.ts
+    realityDiff.ts
+    provenance.ts
+
+    executors/
+      types.ts
+      registry.ts
+      mock.ts
+
+    credentials/
+      types.ts
+      mock.ts
+
+    effects/
+      types.ts
+      wmsMove.ts
+
+  workers/
+    execution.worker.ts
+
+  api/
+    openapi.ts
+    intents/
+      route.ts
+      [id]/
+        route.ts
+        grants/route.ts
+        dispatch/route.ts
+        evidence/route.ts
+        provenance/route.ts
+    executors/route.ts
+    diffs/
+      route.ts
+      [id]/
+        route.ts
+        decision/route.ts
+        merge/route.ts
+    executions/
+      [id]/
+        evidence/route.ts             # stretch external ingress
+
+  backend/
+    reality-layer/
+      page.meta.ts
+      page.tsx
+      intents/
+        [id]/
+          page.meta.ts
+          page.tsx
+
+  components/
+    RealityLayerDashboard.tsx
+    RealityIntentDetail.tsx
+
+  i18n/
+    en.json
+    pl.json
+
+  migrations/
+    MigrationYYYYMMDDHHMMSS_reality_layer.ts
+
+  __tests__/
+    gate.test.ts
+    stateMachine.test.ts
+    authorization.test.ts
+    evidence.test.ts
+    realityDiff.test.ts
+    mockExecutor.test.ts
+    wmsMoveEffect.test.ts
+
+  __integration__/
+    TC-REALITY-001-vertical-slice.spec.ts
+    TC-REALITY-002-no-self-authorization.spec.ts
+    TC-REALITY-003-idempotent-merge.spec.ts
+    TC-REALITY-004-unexpected-result.spec.ts
+    TC-REALITY-005-cross-tenant.spec.ts
+\`\`\`
+
+No \`runtime.ts\` is required. Migrations are module-owned. The installer already copies \`mercato/modules/*\` into the Open Mercato app and runs generation.
+
+## Second-pass adversarial review
+
+The task explicitly requires a second pass. Results:
+
+1. **Which parts duplicate Open Mercato mechanisms?**  
+   Removed parallel approval/audit/event/workflow ideas. AI mutation approval remains \`prepareMutation\`; audit remains \`ActionLog\`; asynchronous work remains Queue; business effect remains WMS command.
+
+2. **Which parts are unnecessary for HackOn?**  
+   No persistent Executor/Capability/Credential/GateEvaluation/ReconciliationDecision entities; no workflow definition; no runtime loop; no generic ontology; no auto-compensation.
+
+3. **Which abstractions leak robotics details upward?**  
+   Executor interface has only semantic task/capability/evidence. Pose, joint state, battery, map, MoveIt and ROS messages are absent.
+
+4. **Which authorization paths permit escalation?**  
+   Main risks are agent/service grant, same-originator grant, downstream WMS bypass, client-supplied authorization scope. Mitigations are human-kind check, principal inequality, server-derived scope digest, separate merge feature plus WMS feature.
+
+5. **Where can retries duplicate effects?**  
+   Dispatch key, executor idempotency key, evidence externalEventId and WMS diff UUID reference are separate dedupe boundaries. Worker/event subscribers are explicitly idempotent.
+
+6. **Where can an AI bypass approval?**  
+   Grant/merge/force are absent from typed AI tools and reject non-human principals. AI-created intent remains a mutation behind the existing AI approval path.
+
+7. **Which data is append-only?**  
+   Evidence is append-only. ActionLog is canonical immutable audit history. WMS movement is append-only domain ledger. Execution attempts are never rewritten into a different attempt.
+
+8. **Which assumptions block humanoid/AMR/drone support?**  
+   None in the executor contract: no pose/joint/map/battery fields and executor may denote an application/cell/controller rather than a robot.
+
+9. **Smallest coherent formal state machine?**  
+   Intent + execution + diff status, grants/evidence/effect set. Five persisted entities are enough; formal model needs fewer data fields.
+
+10. **Can MVP run without any physical robot?**  
+    Yes. MockExecutor is the normative reference and exercises every trust boundary including unexpected outcome.
+
+### Review — 2026-09-19
+
+- **Reviewer:** Agent architecture pass; human review pending
+- **Security:** design pass; no-self-grant, separate machine credentials, tenant scope and downstream authorization specified
+- **Performance:** bounded JSON/arrays, indexed list paths, asynchronous physical I/O
+- **Cache:** no custom cache required for MVP; canonical command/data mechanisms own business cache invalidation
+- **Commands:** all state changes command-backed; physical/WMS reversal modeled as counter-action, not generic undo
+- **Risks:** critical retry/late-event/stale-state paths specified
+- **Verdict:** **Ready for human architecture review; implementation not yet authorized**
+
+## RECOMMENDED ARCHITECTURE
+
+A self-contained \`reality_layer\` Open Mercato app module with five persistent entities, deterministic Reality Gate, separate human authorization and executor credential providers, queue-backed replaceable \`PhysicalExecutor\`, append-only evidence, explicit RealityDiff, and command-backed human reconciliation into domain truth.
+
+## HACKATHON CUT LINE
+
+Finish MockExecutor end-to-end first. The demo is successful before any A1XY/LeRobot code exists if it proves:
+
+\`\`\`text
+intent -> blocked -> human scoped grant -> execute -> evidence -> diff
+       -> business state still unchanged -> explicit merge -> one audited WMS mutation
+\`\`\`
+
+Hardware/VLM integration is additive after that invariant is visible.
+
+## FIRST 10 IMPLEMENTATION TASKS
+
+1. Add module skeleton, ACL/setup/DI and migration.
+2. Implement five entities and strict Zod schemas.
+3. Implement pure state transition table and tests.
+4. Implement \`reality_layer.intent.create\` + query APIs.
+5. Implement Reality Gate with WMS source-state check and Mock capability/credential providers.
+6. Implement human-only scoped grant command + no-self-authorization tests.
+7. Implement executor registry, MockExecutor, dispatch command and queue worker.
+8. Implement append-only evidence + conflict handling + RealityDiff builder.
+9. Implement WMS merge adapter using RealityDiff UUID as WMS idempotency reference.
+10. Implement dashboard/detail/provenance UI and the full Playwright vertical-slice/idempotency/security test.
+
+## TOP 10 OPEN QUESTIONS
+
+1. Strict two-person rule for human-created intents, or only for agent/service origin?
+2. Exact WMS fixture IDs/model for PART-17 and two locations?
+3. Exact restricted workspace used to demonstrate BLOCKED?
+4. Static vs configured executor registry after HackOn?
+5. VLM evidence ingress mechanism?
+6. Artifact/image storage abstraction?
+7. Serial-tracked vs quantity-1 component semantics?
+8. Agent Orchestrator available in judging environment?
+9. A1XY/LeRobot bridge transport?
+10. Lean 4 seed required before judging or immediately afterward?
+
+## TOP 10 FAILURE / SECURITY CASES
+
+1. Agent attempts to grant its own intent.
+2. Same human originator attempts self-grant under strict two-person policy.
+3. Grant expires while execution waits in queue.
+4. Queue delivers the same dispatch twice.
+5. Executor sends duplicate completion.
+6. Timeout is followed by a late success callback.
+7. Performer and independent observer disagree.
+8. Physical move succeeds but WMS merge initially fails/crashes.
+9. Business inventory changes between evidence capture and merge.
+10. Cross-tenant or forged IDs are used to read/grant/merge another organization's operation.
+
 ## Human review gate
 
-Implementation must not begin until this specification has been expanded through sections I–T, run through the adversarial review below, and reviewed by a human. Any implementation commit before that review is out of scope for this branch.
+**STOP HERE before implementation.** The attached task explicitly requires human review after the blueprint. Once a human approves this architecture (and resolves any desired open questions), implementation can proceed phase-by-phase on a separate implementation branch based on this design branch or directly from \`physical_ai\` with this spec carried forward.
