@@ -80,11 +80,13 @@ Expected sequence:
 01-install
 02-build-packages
 03-generate
-04-worker-discovery
-05-build-packages-after-generate
-06-typecheck
-07-unit-tests
-08-webpack-build
+04-db-migrate
+05-acl-sync
+06-worker-discovery
+07-build-packages-after-generate
+08-typecheck
+09-unit-tests
+10-webpack-build
 ```
 
 The production build is intentionally:
@@ -156,8 +158,15 @@ Required observations:
 ```
 before reconciliation: 0 movements
 after merge:           1 movement
-after merge replay:    1 movement
+after merge:                   1 movement
+after direct WMS replay:        1 movement, same movementId
+after Reality Layer replay:     1 movement
+source/destination after replay: 4 / 1 units
 ```
+
+The direct WMS replay deliberately resubmits the same transfer with
+`referenceId = RealityDiff.id`. This exercises WMS's downstream idempotency
+boundary rather than merely relying on the RealityDiff already being terminal.
 
 It also requires the final Reality Layer state to be:
 
@@ -177,10 +186,10 @@ If `03-generate` fails, inspect:
 /tmp/reality-layer-gates/03-generate.log
 ```
 
-If `04-worker-discovery` fails, the worker was not emitted into the generated registry; do not
+If `06-worker-discovery` fails, the worker was not emitted into the generated registry; do not
 debug queue execution yet.
 
-If `09-e2e` times out with an execution stuck in `queued`, worker discovery may have succeeded
+If `11-e2e` times out with an execution stuck in `queued`, worker discovery may have succeeded
 but no worker runtime is consuming `reality-layer-execution`. Start or inspect:
 
 ```bash
