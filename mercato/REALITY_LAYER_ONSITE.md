@@ -156,11 +156,10 @@ GET /api/wms/inventory/movements?referenceId=<RealityDiff.id>
 Required observations:
 
 ```
-before reconciliation: 0 movements
-after merge:           1 movement
-after merge:                   1 movement
-after direct WMS replay:        1 movement, same movementId
-after Reality Layer replay:     1 movement
+before reconciliation:          0 movements
+after merge:                     1 movement
+after direct WMS replay:         1 movement, same movementId
+after Reality Layer replay:      1 movement
 source/destination after replay: 4 / 1 units
 ```
 
@@ -175,8 +174,7 @@ PhysicalIntent CLOSED
 RealityDiff MERGED
 ```
 
-The fixture is removed in a `finally` block after the test. This verifies the ERP boundary against
-a real platform-owned WMS mutation rather than only checking Reality Layer state.
+Fixture cleanup is attempted in a `finally` block after the test; platform retention/soft-delete rules may intentionally retain ledger-linked records. The assertions verify the ERP boundary against a real platform-owned WMS mutation rather than only checking Reality Layer state.
 
 ## 7. Debugging interpretation
 
