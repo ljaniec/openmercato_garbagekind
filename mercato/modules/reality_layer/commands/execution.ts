@@ -37,7 +37,13 @@ export const dispatchPhysicalExecutionCommand: CommandHandler<
       dispatchKey: input.dispatchKey,
     } as never)
     if (existing) {
-      if (existing.intentId !== input.intentId || existing.executorId !== input.executorId) {
+      const existingScenario =
+        (existing.executorMetadataJson as { mockScenario?: unknown } | null)?.mockScenario ?? 'success'
+      if (
+        existing.intentId !== input.intentId ||
+        existing.executorId !== input.executorId ||
+        existingScenario !== input.mockScenario
+      ) {
         throw new Error('Execution dispatch key was already used for a different request.')
       }
       return { executionId: existing.id, status: existing.status, idempotentReplay: true }

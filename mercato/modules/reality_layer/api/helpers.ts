@@ -9,6 +9,14 @@ export async function buildRealityRequestContext(req: Request): Promise<CommandR
   const auth = await getAuthFromRequest(req)
   if (!auth?.tenantId || !auth.sub) throw new Error('Unauthorized')
   const scope = await resolveOrganizationScopeForRequest({ container, auth, request: req })
+  // Physical mutations must never silently retarget to a fallback organization.
+  // The directory scope resolver marks an explicit but inaccessible/dead org
+  // selection as rejected; ordinary application flows may fall back, but the
+  // Reality Layer fails closed because the selected org is part of the physical
+  // authorization and provenance boundary.
+  if (scope?.selectionRejected) {
+    throw new Error('Requested organization context was rejected.')
+  }
   const organizationId = scope?.selectedId ?? auth.orgId ?? null
   if (!organizationId) throw new Error('Organization context required')
   return {
@@ -46,8 +54,16 @@ export async function runRealityMutation(
   })
   if (!guard.ok) return guard.response
 
+  // Custom write routes must honor mutation-guard payload transforms exactly like
+  // makeCrudRoute does. Registry guards may sanitize, constrain or enrich the
+  // submitted payload; executing the original input would silently bypass that
+  // contract while still reporting the guard as passed.
+  const guardedInput = guard.modifiedPayload
+    ? { ...input, ...guard.modifiedPayload }
+    : input
+
   const commandBus = ctx.container.resolve('commandBus') as CommandBus
-  const { result } = await commandBus.execute(commandId, { input, ctx })
+  const { result } = await commandBus.execute(commandId, { input: guardedInput, ctx })
   await guard.runAfterSuccess().catch(() => undefined)
   return result
 }

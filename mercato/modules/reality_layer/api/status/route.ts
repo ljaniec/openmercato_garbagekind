@@ -5,7 +5,11 @@ import { ExecutionRecord, EvidenceEnvelope, PhysicalIntent, RealityDiff } from '
 import { buildRealityRequestContext } from '../helpers'
 
 const querySchema = z.object({ intentId: z.string().uuid() })
-export const metadata = { GET: { requireAuth: true, requireFeatures: ['reality_layer.intent.view'] } }
+export const metadata = { GET: { requireAuth: true, requireFeatures: [
+  'reality_layer.intent.view',
+  'reality_layer.evidence.view',
+  'reality_layer.diff.view',
+] } }
 export async function GET(req: Request) {
   try {
     const ctx = await buildRealityRequestContext(req)
