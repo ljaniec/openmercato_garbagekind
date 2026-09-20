@@ -83,7 +83,7 @@ export async function ensureTopology(
       code: WAREHOUSE_CODE,
       name: WAREHOUSE_NAME,
       isActive: true,
-    } as Warehouse)
+    })
     em.persist(warehouse)
     created += 1
   }
@@ -105,7 +105,7 @@ export async function ensureTopology(
         code: spec.code,
         name: spec.name,
         priority: spec.priority,
-      } as WarehouseZone)
+      })
       em.persist(zone)
       created += 1
     }
@@ -143,7 +143,7 @@ export async function ensureTopology(
         isActive: true,
         capacityWeight: plan.capacityKg === null ? null : String(plan.capacityKg),
         metadata,
-      } as WarehouseLocation)
+      })
       em.persist(location)
       created += 1
     } else {
