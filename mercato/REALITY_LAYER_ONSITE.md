@@ -97,6 +97,37 @@ next build --webpack
 
 because the hackathon Open Mercato checkout carries a custom Webpack replacement configuration.
 
+## 3.5 Current host-specific typecheck state
+
+On the DGX host, the latest observed gate moved forward:
+
+- `generate`: PASS in ~20.8 s;
+- post-generate `build:packages`: PASS, 38/38;
+- first failing gate: application TypeScript.
+
+The source branch now fixes the six reported `sortownia` API-drift errors:
+
+- ACL declaration no longer imports the removed `FeatureDefinition` symbol;
+- Data Sync `ValidationResult` uses `ok` rather than legacy `valid`;
+- mixed dry-run/real movement outcomes narrow `error` safely;
+- MikroORM create payloads are no longer cast to full entity instances.
+
+The remaining reported TypeScript failures are local-only `next.config.ts` debug callbacks
+(`p` / `r` implicit `any`) from the preserved Qwen Webpack diagnostics.
+
+After those annotations are fixed, prefer this order:
+
+```bash
+cd /home/ljaniec/Repositories/open-mercato/apps/mercato
+corepack yarn typecheck
+
+NODE_OPTIONS=--max-old-space-size=8192 \
+  corepack yarn exec next build --webpack
+```
+
+If the production Webpack build succeeds, prefer the production runtime for the hackathon demo instead
+of debugging the known-broken Webpack dev fallback. The dev fallback is only required for hot reload.
+
 ## 4. Start Open Mercato
 
 Use the normal starter/runtime after the Qwen platform patch is stable, for example:
