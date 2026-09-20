@@ -1,6 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import { expect, test, type APIRequestContext, type APIResponse } from '@playwright/test'
 import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api'
+import {
+  createProductFixture,
+  createVariantFixture,
+  deleteCatalogProductIfExists,
+} from '@open-mercato/core/helpers/integration/catalogFixtures'
+import {
+  deleteGeneralEntityIfExists,
+  getTokenScope,
+} from '@open-mercato/core/helpers/integration/generalFixtures'
 
 export const integrationMeta = {
   dependsOnModules: ['reality_layer'],
@@ -57,6 +66,31 @@ async function postJson<T>(
     response.status(),
     `${path} failed: ${(body as { error?: string }).error ?? JSON.stringify(body)}`,
   ).toBe(expectedStatus)
+  return body
+}
+
+async function createCrudFixture(
+  request: APIRequestContext,
+  token: string,
+  path: string,
+  data: Record<string, unknown>,
+): Promise<string> {
+  const response = await apiRequest(request, 'POST', path, { token, data })
+  const body = await readJson<{ id?: string; error?: string }>(response)
+  expect(response.status(), `${path} create failed: ${body.error ?? JSON.stringify(body)}`).toBe(201)
+  expect(typeof body.id === 'string' && body.id.length > 0, `${path} must return id`).toBe(true)
+  return body.id!
+}
+
+async function postAction(
+  request: APIRequestContext,
+  token: string,
+  path: string,
+  data: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const response = await apiRequest(request, 'POST', path, { token, data })
+  const body = await readJson<Record<string, unknown> & { error?: string }>(response)
+  expect(response.status(), `${path} failed: ${body.error ?? JSON.stringify(body)}`).toBe(200)
   return body
 }
 
@@ -349,87 +383,170 @@ test.describe('TC-REALITY-001 — Reality Layer MVP causal chain', () => {
   })
 })
 
-test.describe('TC-REALITY-002 — optional WMS reconciliation exactly-once proof', () => {
+test.describe('TC-REALITY-002 — WMS reconciliation exactly-once proof', () => {
   test('ERP remains unchanged before merge and one movement exists after merge/retry', async ({ request }) => {
-    const warehouseId = process.env.REALITY_TEST_WAREHOUSE_ID
-    const sourceLocationId = process.env.REALITY_TEST_SOURCE_LOCATION_ID
-    const destinationLocationId = process.env.REALITY_TEST_DEST_LOCATION_ID
-    const variantId = process.env.REALITY_TEST_VARIANT_ID
-    const quantity = Number(process.env.REALITY_TEST_QUANTITY ?? '1')
-
-    test.skip(
-      !warehouseId || !sourceLocationId || !destinationLocationId || !variantId,
-      'Set REALITY_TEST_WAREHOUSE_ID, REALITY_TEST_SOURCE_LOCATION_ID, REALITY_TEST_DEST_LOCATION_ID and REALITY_TEST_VARIANT_ID to run WMS merge proof.',
-    )
-
     const employeeToken = await getAuthToken(request, 'employee')
     const adminToken = await getAuthToken(request, 'admin')
-    const created = await createIntent(request, employeeToken, {
-      subjectKind: 'catalog_variant',
-      subjectId: variantId!,
-      sourceKind: 'wms_location',
-      sourceId: sourceLocationId!,
-      destinationKind: 'wms_location',
-      destinationId: destinationLocationId!,
-      parameters: { warehouseId, quantity },
-    })
+    const scope = getTokenScope(adminToken)
+    const suffix = randomUUID().slice(0, 8)
 
-    await grantAndAuthorize(request, adminToken, created.intentId)
-    await dispatch(request, adminToken, created.intentId, 'success')
+    let productId: string | null = null
+    let warehouseId: string | null = null
+    let sourceLocationId: string | null = null
+    let destinationLocationId: string | null = null
+    let profileId: string | null = null
 
-    const proposed = await waitForStatus(
-      request,
-      adminToken,
-      created.intentId,
-      (status) => status.diffs.some((row) => row.status === 'proposed'),
-    )
-    const diff = proposed.diffs[0]!
-    expect(diff.effectAdapterKey).toBe('wms_move')
+    try {
+      productId = await createProductFixture(request, adminToken, {
+        title: `Reality Layer E2E ${suffix}`,
+        sku: `RLE2E-${suffix}`,
+      })
+      const variantId = await createVariantFixture(request, adminToken, {
+        productId,
+        name: `Reality Layer Variant ${suffix}`,
+        sku: `RLE2EV-${suffix}`,
+      })
 
-    const before = await apiRequest(
-      request,
-      'GET',
-      `/api/wms/inventory/movements?referenceId=${encodeURIComponent(diff.id)}&page=1&pageSize=20`,
-      { token: adminToken },
-    )
-    expect(before.status()).toBe(200)
-    const beforeBody = await readJson<{ items?: unknown[] }>(before)
-    expect(beforeBody.items ?? []).toHaveLength(0)
+      warehouseId = await createCrudFixture(request, adminToken, '/api/wms/warehouses', {
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        name: `Reality Layer Warehouse ${suffix}`,
+        code: `RLW${suffix}`,
+        city: 'Wroclaw',
+        country: 'PL',
+        timezone: 'Europe/Warsaw',
+        isActive: true,
+      })
 
-    const merged = await postJson<{ ok: true; diffId: string; status: string }>(
-      request,
-      adminToken,
-      '/api/reality_layer/reconciliation',
-      { diffId: diff.id, action: 'merge' },
-      200,
-    )
-    expect(merged.status).toBe('merged')
+      sourceLocationId = await createCrudFixture(request, adminToken, '/api/wms/locations', {
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        warehouseId,
+        code: `SRC-${suffix}`,
+        type: 'bin',
+        capacityUnits: 100,
+        capacityWeight: 500,
+        isActive: true,
+      })
+      destinationLocationId = await createCrudFixture(request, adminToken, '/api/wms/locations', {
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        warehouseId,
+        code: `DST-${suffix}`,
+        type: 'bin',
+        capacityUnits: 100,
+        capacityWeight: 500,
+        isActive: true,
+      })
 
-    const after = await apiRequest(
-      request,
-      'GET',
-      `/api/wms/inventory/movements?referenceId=${encodeURIComponent(diff.id)}&page=1&pageSize=20`,
-      { token: adminToken },
-    )
-    expect(after.status()).toBe(200)
-    const afterBody = await readJson<{ items?: unknown[] }>(after)
-    expect(afterBody.items ?? []).toHaveLength(1)
+      profileId = await createCrudFixture(request, adminToken, '/api/wms/inventory-profiles', {
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        catalogProductId: productId,
+        catalogVariantId: variantId,
+        defaultUom: 'pcs',
+        defaultStrategy: 'fifo',
+      })
 
-    const replay = await apiRequest(
-      request,
-      'POST',
-      '/api/reality_layer/reconciliation',
-      { token: adminToken, data: { diffId: diff.id, action: 'merge' } },
-    )
-    expect([200, 400]).toContain(replay.status())
+      await postAction(request, adminToken, '/api/wms/inventory/adjust', {
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        warehouseId,
+        locationId: sourceLocationId,
+        catalogVariantId: variantId,
+        delta: 5,
+        reason: 'Seed Reality Layer reconciliation fixture',
+        referenceType: 'manual',
+        referenceId: randomUUID(),
+        performedBy: scope.userId,
+      })
 
-    const afterReplay = await apiRequest(
-      request,
-      'GET',
-      `/api/wms/inventory/movements?referenceId=${encodeURIComponent(diff.id)}&page=1&pageSize=20`,
-      { token: adminToken },
-    )
-    const afterReplayBody = await readJson<{ items?: unknown[] }>(afterReplay)
-    expect(afterReplayBody.items ?? []).toHaveLength(1)
+      const created = await createIntent(request, employeeToken, {
+        subjectKind: 'catalog_variant',
+        subjectId: variantId,
+        sourceKind: 'wms_location',
+        sourceId: sourceLocationId,
+        destinationKind: 'wms_location',
+        destinationId: destinationLocationId,
+        parameters: { warehouseId, quantity: 1 },
+      })
+
+      await grantAndAuthorize(request, adminToken, created.intentId)
+      await dispatch(request, adminToken, created.intentId, 'success')
+
+      const proposed = await waitForStatus(
+        request,
+        adminToken,
+        created.intentId,
+        (status) => status.diffs.some((row) => row.status === 'proposed'),
+      )
+      const diff = proposed.diffs[0]!
+      expect(diff.effectAdapterKey).toBe('wms_move')
+
+      const movementUrl =
+        `/api/wms/inventory/movements?referenceId=${encodeURIComponent(diff.id)}&page=1&pageSize=20`
+
+      const before = await apiRequest(request, 'GET', movementUrl, { token: adminToken })
+      expect(before.status()).toBe(200)
+      const beforeBody = await readJson<{ items?: unknown[] }>(before)
+      expect(beforeBody.items ?? []).toHaveLength(0)
+
+      const merged = await postJson<{ ok: true; diffId: string; status: string }>(
+        request,
+        adminToken,
+        '/api/reality_layer/reconciliation',
+        { diffId: diff.id, action: 'merge' },
+        200,
+      )
+      expect(merged.status).toBe('merged')
+
+      const after = await apiRequest(request, 'GET', movementUrl, { token: adminToken })
+      expect(after.status()).toBe(200)
+      const afterBody = await readJson<{ items?: unknown[] }>(after)
+      expect(afterBody.items ?? []).toHaveLength(1)
+
+      const replay = await apiRequest(
+        request,
+        'POST',
+        '/api/reality_layer/reconciliation',
+        { token: adminToken, data: { diffId: diff.id, action: 'merge' } },
+      )
+      expect([200, 400]).toContain(replay.status())
+
+      const afterReplay = await apiRequest(request, 'GET', movementUrl, { token: adminToken })
+      expect(afterReplay.status()).toBe(200)
+      const afterReplayBody = await readJson<{ items?: unknown[] }>(afterReplay)
+      expect(afterReplayBody.items ?? []).toHaveLength(1)
+
+      const closed = await loadStatus(request, adminToken, created.intentId)
+      expect(closed.intent.status).toBe('closed')
+      expect(closed.diffs[0]?.status).toBe('merged')
+    } finally {
+      await deleteGeneralEntityIfExists(
+        request,
+        adminToken,
+        '/api/wms/inventory-profiles',
+        profileId,
+      )
+      await deleteGeneralEntityIfExists(
+        request,
+        adminToken,
+        '/api/wms/locations',
+        destinationLocationId,
+      )
+      await deleteGeneralEntityIfExists(
+        request,
+        adminToken,
+        '/api/wms/locations',
+        sourceLocationId,
+      )
+      await deleteGeneralEntityIfExists(
+        request,
+        adminToken,
+        '/api/wms/warehouses',
+        warehouseId,
+      )
+      await deleteCatalogProductIfExists(request, adminToken, productId)
+    }
   })
 })
