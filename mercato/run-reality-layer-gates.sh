@@ -40,7 +40,7 @@ echo "Logs:                 $LOG_DIR"
   git status --short
 ) | tee "$LOG_DIR/00-environment.log"
 
-run_step 01-install env MERCATO_ROOT="$MERCATO_ROOT" "$HERE/install.sh" reality_layer
+run_step 01-install env MERCATO_ROOT="$MERCATO_ROOT" "$HERE/install.sh" reality_layer sortownia
 run_step 02-build-packages bash -lc "cd \"$MERCATO_ROOT\" && corepack yarn build:packages"
 run_step 03-generate bash -lc "cd \"$MERCATO_ROOT\" && corepack yarn generate"
 run_step 04-db-migrate bash -lc "cd \"$MERCATO_ROOT/apps/mercato\" && node scripts/mercato-cli.mjs db migrate"
