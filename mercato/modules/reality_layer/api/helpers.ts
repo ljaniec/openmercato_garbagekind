@@ -46,8 +46,16 @@ export async function runRealityMutation(
   })
   if (!guard.ok) return guard.response
 
+  // Custom write routes must honor mutation-guard payload transforms exactly like
+  // makeCrudRoute does. Registry guards may sanitize, constrain or enrich the
+  // submitted payload; executing the original input would silently bypass that
+  // contract while still reporting the guard as passed.
+  const guardedInput = guard.modifiedPayload
+    ? { ...input, ...guard.modifiedPayload }
+    : input
+
   const commandBus = ctx.container.resolve('commandBus') as CommandBus
-  const { result } = await commandBus.execute(commandId, { input, ctx })
+  const { result } = await commandBus.execute(commandId, { input: guardedInput, ctx })
   await guard.runAfterSuccess().catch(() => undefined)
   return result
 }
