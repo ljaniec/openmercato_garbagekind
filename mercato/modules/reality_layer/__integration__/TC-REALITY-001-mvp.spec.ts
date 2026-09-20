@@ -12,7 +12,7 @@ import {
 } from '@open-mercato/core/helpers/integration/generalFixtures'
 
 export const integrationMeta = {
-  dependsOnModules: ['reality_layer'],
+  dependsOnModules: ['reality_layer', 'wms', 'catalog'],
 }
 
 type RealityStatus = {
