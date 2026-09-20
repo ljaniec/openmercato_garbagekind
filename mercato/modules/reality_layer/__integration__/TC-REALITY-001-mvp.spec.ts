@@ -321,16 +321,18 @@ test.describe('TC-REALITY-001 — Reality Layer MVP causal chain', () => {
     const intentKey = randomUUID()
     const dispatchKey = randomUUID()
 
-    const first = await createIntent(request, employeeToken, { idempotencyKey: intentKey })
+    const subjectId = `box-idem-${randomUUID().slice(0, 8)}`
+    const first = await createIntent(request, employeeToken, {
+      idempotencyKey: intentKey,
+      subjectId,
+    })
     const replay = await createIntent(request, employeeToken, {
       idempotencyKey: intentKey,
-      subjectId: first.intentId,
+      subjectId,
     })
 
-    // The helper generates subjectId by default, so issue the exact replay directly instead.
-    if (replay.intentId !== first.intentId) {
-      throw new Error('Intent replay helper was not called with the original semantic payload.')
-    }
+    expect(replay.intentId).toBe(first.intentId)
+    expect(replay.idempotentReplay).toBe(true)
 
     await grantAndAuthorize(request, adminToken, first.intentId)
     const firstDispatch = await dispatch(request, adminToken, first.intentId, 'success', dispatchKey)
