@@ -43,22 +43,24 @@ echo "Logs:                 $LOG_DIR"
 run_step 01-install env MERCATO_ROOT="$MERCATO_ROOT" "$HERE/install.sh" reality_layer
 run_step 02-build-packages bash -lc "cd \"$MERCATO_ROOT\" && corepack yarn build:packages"
 run_step 03-generate bash -lc "cd \"$MERCATO_ROOT\" && corepack yarn generate"
+run_step 04-db-migrate bash -lc "cd \"$MERCATO_ROOT\" && corepack yarn mercato db migrate"
+run_step 05-acl-sync bash -lc "cd \"$MERCATO_ROOT\" && corepack yarn mercato auth sync-role-acls"
 
 GEN_DIR="$MERCATO_ROOT/apps/mercato/.mercato/generated"
 [[ -d "$GEN_DIR" ]] || fail "Generated registry directory missing: $GEN_DIR"
-if grep -R -n --fixed-strings "reality-layer:execution" "$GEN_DIR" > "$LOG_DIR/04-worker-discovery.log" 2>&1; then
-  cat "$LOG_DIR/04-worker-discovery.log"
+if grep -R -n --fixed-strings "reality-layer:execution" "$GEN_DIR" > "$LOG_DIR/06-worker-discovery.log" 2>&1; then
+  cat "$LOG_DIR/06-worker-discovery.log"
   echo "PASS: reality-layer:execution found in generated registry."
 else
-  grep -R -n --fixed-strings "reality-layer-execution.worker" "$GEN_DIR" > "$LOG_DIR/04-worker-discovery.log" 2>&1 || true
-  cat "$LOG_DIR/04-worker-discovery.log"
+  grep -R -n --fixed-strings "reality-layer-execution.worker" "$GEN_DIR" > "$LOG_DIR/06-worker-discovery.log" 2>&1 || true
+  cat "$LOG_DIR/06-worker-discovery.log"
   fail "Reality Layer worker was not found in generated registries."
 fi
 
-run_step 05-build-packages-after-generate bash -lc "cd \"$MERCATO_ROOT\" && corepack yarn build:packages"
-run_step 06-typecheck bash -lc "cd \"$MERCATO_ROOT\" && corepack yarn workspace @open-mercato/app typecheck"
-run_step 07-unit-tests bash -lc "cd \"$MERCATO_ROOT/apps/mercato\" && corepack yarn test --testPathPatterns modules/reality_layer"
-run_step 08-webpack-build bash -lc "cd \"$MERCATO_ROOT/apps/mercato\" && NODE_OPTIONS=--max-old-space-size=8192 corepack yarn exec next build --webpack"
+run_step 07-build-packages-after-generate bash -lc "cd \"$MERCATO_ROOT\" && corepack yarn build:packages"
+run_step 08-typecheck bash -lc "cd \"$MERCATO_ROOT\" && corepack yarn workspace @open-mercato/app typecheck"
+run_step 09-unit-tests bash -lc "cd \"$MERCATO_ROOT/apps/mercato\" && corepack yarn test --testPathPatterns modules/reality_layer"
+run_step 10-webpack-build bash -lc "cd \"$MERCATO_ROOT/apps/mercato\" && NODE_OPTIONS=--max-old-space-size=8192 corepack yarn exec next build --webpack"
 
 echo; echo "STATIC/BUILD GATES PASSED"
 
@@ -68,5 +70,5 @@ if [[ "${RUN_REALITY_E2E:-0}" != "1" ]]; then
 fi
 
 curl -fsS --max-time 5 "$BASE_URL" >/dev/null 2>&1 || fail "App is not reachable at $BASE_URL"
-run_step 09-e2e bash -lc "cd \"$MERCATO_ROOT\" && OM_INTEGRATION_MODULES=reality_layer BASE_URL=\"$BASE_URL\" corepack yarn exec playwright test --config .ai/qa/tests/playwright.config.ts --grep TC-REALITY"
+run_step 11-e2e bash -lc "cd \"$MERCATO_ROOT\" && OM_INTEGRATION_MODULES=reality_layer BASE_URL=\"$BASE_URL\" corepack yarn exec playwright test --config .ai/qa/tests/playwright.config.ts --grep TC-REALITY"
 echo; echo "G1-G10 AUTOMATABLE GATES PASSED"; echo "Logs: $LOG_DIR"
