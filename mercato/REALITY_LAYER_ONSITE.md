@@ -130,34 +130,22 @@ It uses the standard Open Mercato integration users:
 
 Using two principals is deliberate: the Reality Layer forbids self-authorization.
 
-## 6. Turn on the WMS exactly-once proof
+## 6. WMS exactly-once proof is self-contained
 
-The generic tests require no domain fixture. G7–G9 additionally need one catalog variant with
-positive available stock at a source WMS location.
+No WMS UUIDs or pre-existing stock fixture are required.
 
-Set:
+`TC-REALITY-002` creates a disposable fixture through the normal Open Mercato APIs:
 
-```bash
-export REALITY_TEST_WAREHOUSE_ID=<uuid>
-export REALITY_TEST_SOURCE_LOCATION_ID=<uuid>
-export REALITY_TEST_DEST_LOCATION_ID=<uuid>
-export REALITY_TEST_VARIANT_ID=<uuid>
-export REALITY_TEST_QUANTITY=1
+```
+catalog product + variant
+→ WMS warehouse
+→ source + destination locations
+→ inventory profile
+→ +5 source inventory adjustment
+→ Reality Layer move intent for quantity 1
 ```
 
-The source and destination must be different and belong to the selected warehouse; source
-`available` must be at least `REALITY_TEST_QUANTITY`.
-
-Then rerun:
-
-```bash
-RUN_REALITY_E2E=1 \
-MERCATO_ROOT=/home/ljaniec/Repositories/open-mercato \
-BASE_URL=http://localhost:3000 \
-bash mercato/run-reality-layer-gates.sh
-```
-
-The proof uses the platform WMS ledger API:
+It then checks the actual WMS ledger by:
 
 ```
 GET /api/wms/inventory/movements?referenceId=<RealityDiff.id>
@@ -171,7 +159,15 @@ after merge:           1 movement
 after merge replay:    1 movement
 ```
 
-Thus the test checks the actual WMS ledger, not only the Reality Layer's local status.
+It also requires the final Reality Layer state to be:
+
+```
+PhysicalIntent CLOSED
+RealityDiff MERGED
+```
+
+The fixture is removed in a `finally` block after the test. This verifies the ERP boundary against
+a real platform-owned WMS mutation rather than only checking Reality Layer state.
 
 ## 7. Debugging interpretation
 
