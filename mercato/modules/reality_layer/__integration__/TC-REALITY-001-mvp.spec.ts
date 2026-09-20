@@ -372,6 +372,23 @@ test.describe('TC-REALITY-001 — Reality Layer MVP causal chain', () => {
     const firstDispatch = await dispatch(request, adminToken, first.intentId, 'success', dispatchKey)
     const replayDispatch = await dispatch(request, adminToken, first.intentId, 'success', dispatchKey)
     expect(replayDispatch.executionId).toBe(firstDispatch.executionId)
+    expect(replayDispatch.idempotentReplay).toBe(true)
+
+    const conflictingReplay = await apiRequest(
+      request,
+      'POST',
+      '/api/reality_layer/dispatch',
+      {
+        token: adminToken,
+        data: {
+          intentId: first.intentId,
+          executorId: 'mock:cell-1',
+          dispatchKey,
+          mockScenario: 'failure',
+        },
+      },
+    )
+    expect(conflictingReplay.status()).toBe(400)
 
     const terminal = await waitForStatus(
       request,
