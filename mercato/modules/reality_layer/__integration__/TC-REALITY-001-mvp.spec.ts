@@ -491,7 +491,12 @@ test.describe('TC-REALITY-002 — WMS reconciliation exactly-once proof', () => 
       const beforeBody = await readJson<{ items?: unknown[] }>(before)
       expect(beforeBody.items ?? []).toHaveLength(0)
 
-      const merged = await postJson<{ ok: true; diffId: string; status: string }>(
+      const merged = await postJson<{
+        ok: true
+        diffId: string
+        status: string
+        movementId: string
+      }>(
         request,
         adminToken,
         '/api/reality_layer/reconciliation',
@@ -499,12 +504,58 @@ test.describe('TC-REALITY-002 — WMS reconciliation exactly-once proof', () => 
         200,
       )
       expect(merged.status).toBe('merged')
+      expect(merged.movementId).toBeTruthy()
 
       const after = await apiRequest(request, 'GET', movementUrl, { token: adminToken })
       expect(after.status()).toBe(200)
-      const afterBody = await readJson<{ items?: unknown[] }>(after)
+      const afterBody = await readJson<{ items?: Array<{ id?: string }> }>(after)
       expect(afterBody.items ?? []).toHaveLength(1)
+      expect(afterBody.items?.[0]?.id).toBe(merged.movementId)
 
+      // Exercise the DOWNSTREAM idempotency boundary directly, not only the
+      // RealityDiff terminal-state guard. This is the exact WMS effect shape
+      // used by reconciliation with the same referenceId = RealityDiff.id.
+      // A broken WMS idempotency implementation would move a second unit here.
+      const downstreamReplay = await postAction(
+        request,
+        adminToken,
+        '/api/wms/inventory/move',
+        {
+          organizationId: scope.organizationId,
+          tenantId: scope.tenantId,
+          warehouseId,
+          fromLocationId: sourceLocationId,
+          toLocationId: destinationLocationId,
+          catalogVariantId: variantId,
+          quantity: 1,
+          type: 'transfer',
+          reason: 'Reality Layer accepted physical reconciliation',
+          referenceType: 'manual',
+          referenceId: diff.id,
+          performedBy: scope.userId,
+          metadata: {
+            realityIntentId: created.intentId,
+            realityDiffId: diff.id,
+            replayProbe: true,
+          },
+        },
+      )
+      expect(downstreamReplay.movementId).toBe(merged.movementId)
+
+      const afterDownstreamReplay = await apiRequest(
+        request,
+        'GET',
+        movementUrl,
+        { token: adminToken },
+      )
+      expect(afterDownstreamReplay.status()).toBe(200)
+      const afterDownstreamReplayBody = await readJson<{ items?: unknown[] }>(
+        afterDownstreamReplay,
+      )
+      expect(afterDownstreamReplayBody.items ?? []).toHaveLength(1)
+
+      // Also retry the Reality Layer merge endpoint itself. A terminal MERGED
+      // diff may return a client error, but it must never append another WMS row.
       const replay = await apiRequest(
         request,
         'POST',
