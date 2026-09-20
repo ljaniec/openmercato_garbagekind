@@ -554,6 +554,30 @@ test.describe('TC-REALITY-002 — WMS reconciliation exactly-once proof', () => 
       )
       expect(afterDownstreamReplayBody.items ?? []).toHaveLength(1)
 
+      const balanceFor = async (locationId: string) => {
+        const params = new URLSearchParams({
+          warehouseId: warehouseId!,
+          locationId,
+          catalogVariantId: variantId,
+          page: '1',
+          pageSize: '20',
+        })
+        const response = await apiRequest(
+          request,
+          'GET',
+          `/api/wms/inventory/balances?${params.toString()}`,
+          { token: adminToken },
+        )
+        expect(response.status()).toBe(200)
+        const body = await readJson<{
+          items?: Array<{ quantity_on_hand?: string | number | null }>
+        }>(response)
+        return Number(body.items?.[0]?.quantity_on_hand ?? 0)
+      }
+
+      expect(await balanceFor(sourceLocationId!)).toBe(4)
+      expect(await balanceFor(destinationLocationId!)).toBe(1)
+
       // Also retry the Reality Layer merge endpoint itself. A terminal MERGED
       // diff may return a client error, but it must never append another WMS row.
       const replay = await apiRequest(
